@@ -32,6 +32,7 @@ export interface FixedExpense {
   name: string
   amount: number
   category: string
+  account: string
   createdAt: number
 }
 
@@ -43,10 +44,7 @@ export interface FixedPayment {
   paidAt: number
 }
 
-const ACCOUNTS = [
-  'Bradesco', 'Nubank', 'Nubank PJ', 'Reserva',
-  'Banco Inter', 'Renda Fixa', 'Renda Variavel', 'Forex', 'Outros',
-]
+const ACCOUNTS: string[] = []
 
 const MONTHLY_INCOME = 0
 
@@ -90,7 +88,7 @@ const generateMonths = () => {
 // ─── HOOK: load custom accounts from Firestore ─────────────────────────────
 
 function useAccounts(uid: string) {
-  const [accounts, setAccounts] = useState<string[]>(ACCOUNTS)
+  const [accounts, setAccounts] = useState<string[]>([])
 
   useEffect(() => {
     getDocs(collection(db,'users',uid,'config')).then(snap => {
@@ -319,6 +317,7 @@ function GastosScreen({ uid }: { uid: string }) {
   const [newFixName, setNewFixName] = useState('')
   const [newFixAmt, setNewFixAmt] = useState('')
   const [newFixCat, setNewFixCat] = useState('')
+  const [newFixAccount, setNewFixAccount] = useState('')
   const [fixMsg, setFixMsg] = useState('')
   const mk = currentMonthKey()
 
@@ -359,9 +358,10 @@ function GastosScreen({ uid }: { uid: string }) {
     const v = parseFloat(newFixAmt.replace(',','.'))
     if (!newFixName.trim()||!v||v<=0) { setFixMsg('Preencha nome e valor'); return }
     await addDoc(collection(db,'users',uid,'fixedExpenses'), {
-      name:newFixName.trim(), amount:v, category:newFixCat.trim()||'Fixo', createdAt:Date.now(),
+      name:newFixName.trim(), amount:v, category:newFixCat.trim()||'Fixo',
+      account:newFixAccount||customAccounts[0]||'', createdAt:Date.now(),
     })
-    setNewFixName(''); setNewFixAmt(''); setNewFixCat('')
+    setNewFixName(''); setNewFixAmt(''); setNewFixCat(''); setNewFixAccount('')
     setFixMsg('Gasto fixo adicionado!')
     setTimeout(() => setFixMsg(''), 2000)
     load()
@@ -390,7 +390,7 @@ function GastosScreen({ uid }: { uid: string }) {
       const [y,m] = mk.split('-')
       await addDoc(collection(db,'users',uid,'transactions'), {
         type:'expense', value:fx.amount, description:`[FIXO] ${fx.name}`,
-        category:fx.category, account:conta, date:`01/${m}/${y}`, createdAt:Date.now(),
+        category:fx.category, account:fx.account||customAccounts[0]||'', date:`01/${m}/${y}`, createdAt:Date.now(),
       })
     }
     load()
@@ -448,7 +448,7 @@ function GastosScreen({ uid }: { uid: string }) {
                       </button>
                       <div style={{ flex:1 }}>
                         <div style={{ fontSize:13, fontWeight:500, color:paid?'rgba(255,255,255,0.4)':'#fff', textDecoration:paid?'line-through':'none' }}>{fx.name}</div>
-                        <div style={{ fontSize:10, color:'rgba(255,255,255,0.3)' }}>{fx.category}</div>
+                        <div style={{ fontSize:10, color:'rgba(255,255,255,0.3)' }}>{fx.category}{fx.account ? ` | ${fx.account}` : ''}</div>
                       </div>
                       <div style={{ fontSize:13, fontWeight:500, color:paid?'rgba(255,255,255,0.35)':'#E24B4A' }}>{fmt(fx.amount)}</div>
                       <button onClick={() => deleteFixed(fx.id)} style={{ background:'none', border:'none', color:'rgba(255,255,255,0.2)', cursor:'pointer', fontSize:16, padding:'0 2px' }}>x</button>
@@ -469,7 +469,11 @@ function GastosScreen({ uid }: { uid: string }) {
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
             <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={newFixAmt} onChange={e => setNewFixAmt(e.target.value)} />
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
-            <input style={{ ...S.input, marginBottom:0 }} placeholder="Ex: Moradia, Servicos..." value={newFixCat} onChange={e => setNewFixCat(e.target.value)} />
+            <input style={S.input} placeholder="Ex: Moradia, Servicos..." value={newFixCat} onChange={e => setNewFixCat(e.target.value)} />
+            <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
+            <select style={{ ...S.select, marginBottom:0 }} value={newFixAccount} onChange={e => setNewFixAccount(e.target.value)}>
+              {customAccounts.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
             {fixMsg && <div style={{ textAlign:'center', fontSize:12, color:fixMsg.includes('!')?'#00E5A0':'#E24B4A', margin:'8px 0' }}>{fixMsg}</div>}
             <button style={{ ...S.btn, marginTop:12 }} onClick={addFixed}>Adicionar</button>
           </div>
@@ -623,8 +627,8 @@ function ContasScreen({ uid }: { uid: string }) {
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
   const [editMode, setEditMode] = useState(false)
-  const [accounts, setAccounts] = useState<string[]>(ACCOUNTS)
-  const [editNames, setEditNames] = useState<string[]>(ACCOUNTS)
+  const [accounts, setAccounts] = useState<string[]>([])
+  const [editNames, setEditNames] = useState<string[]>([])
   const [newAccount, setNewAccount] = useState('')
   const pmk = prevMonthKey(selectedMonth)
 
@@ -786,6 +790,11 @@ function ContasScreen({ uid }: { uid: string }) {
 
           <div style={S.card}>
             <div style={S.label}>Saldos de {monthLabel(selectedMonth)}</div>
+            {accounts.length === 0 && (
+              <div style={{ ...S.muted, textAlign:'center', padding:'16px 0' }}>
+                Nenhuma conta cadastrada. Clique em "Editar contas" para adicionar.
+              </div>
+            )}
             <div style={{ marginTop:12 }}>
               {accounts.map(account => {
                 const prev = prevMap[account]
