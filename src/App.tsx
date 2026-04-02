@@ -1,29 +1,54 @@
 import { useState, useEffect, useCallback } from 'react'
-import {
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
-} from 'firebase/auth'
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth'
 import type { User } from 'firebase/auth'
-import {
-  collection,
-  addDoc,
-  getDocs,
-  deleteDoc,
-  doc,
-  query,
-  orderBy,
-} from 'firebase/firestore'
-import {
-  AreaChart, Area, XAxis, YAxis, Tooltip,
-  ResponsiveContainer, PieChart, Pie, Cell,
-} from 'recharts'
+import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, setDoc } from 'firebase/firestore'
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts'
 import { auth, db } from './firebase'
-import type { Transaction, AccountEntry } from './types'
-import { ACCOUNTS, CATEGORIES, MONTHLY_INCOME } from './types'
+// ─── TYPES & CONSTANTS (inline) ───────────────────────────────────────────
 
-type Category = keyof typeof CATEGORIES
+export type TxType = 'expense' | 'income'
+
+export interface Transaction {
+  id: string
+  type: TxType
+  value: number
+  description: string
+  category: string
+  account: string
+  date: string
+  createdAt: number
+}
+
+export interface AccountEntry {
+  id: string
+  account: string
+  balance: number
+  month: string
+  createdAt: number
+}
+
+export interface FixedExpense {
+  id: string
+  name: string
+  amount: number
+  category: string
+  createdAt: number
+}
+
+export interface FixedPayment {
+  id: string
+  fixedExpenseId: string
+  month: string
+  paid: boolean
+  paidAt: number
+}
+
+const ACCOUNTS = [
+  'Bradesco', 'Nubank', 'Nubank PJ', 'Reserva',
+  'Banco Inter', 'Renda Fixa', 'Renda Variavel', 'Forex', 'Outros',
+]
+
+const MONTHLY_INCOME = 0
 
 const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 
@@ -51,13 +76,12 @@ const prevMonthKey = (key: string) => {
 
 const generateMonths = () => {
   const months = []
-  const start = new Date(2024, 0, 1)
+  const start = new Date(2026, 0, 1)
   const now = new Date()
   const end = new Date(now.getFullYear(), now.getMonth(), 1)
   const cur = new Date(start)
   while (cur <= end) {
-    const key = `${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,'0')}`
-    months.push(key)
+    months.push(`${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,'0')}`)
     cur.setMonth(cur.getMonth()+1)
   }
   return months.reverse()
@@ -67,16 +91,17 @@ const S = {
   app: { display:'flex', flexDirection:'column' as const, height:'100%', width:'100%', maxWidth:430, margin:'0 auto', background:'#0A0B0F', position:'relative' as const },
   screen: { flex:1, overflowY:'auto' as const, padding:'20px 16px 90px' },
   card: { background:'#13141A', border:'0.5px solid rgba(255,255,255,0.07)', borderRadius:16, padding:16, marginBottom:10 },
-  label: { fontSize:11, color:'#4E9EFF', letterSpacing:'0.12em', textTransform:'uppercase' as const, marginBottom:4, fontFamily:"'DM Mono', monospace" },
-  bigVal: { fontSize:30, fontWeight:600, letterSpacing:'-0.02em' },
+  label: { fontSize:11, color:'#4E9EFF', letterSpacing:'0.12em', textTransform:'uppercase' as const, marginBottom:4, fontFamily:"'DM Mono',monospace" },
   muted: { color:'rgba(255,255,255,0.4)', fontSize:12 },
   input: { width:'100%', padding:'12px 14px', background:'#1C1D25', border:'0.5px solid rgba(255,255,255,0.12)', borderRadius:12, color:'#fff', fontSize:15, outline:'none', marginBottom:12 },
   select: { width:'100%', padding:'12px 14px', background:'#1C1D25', border:'0.5px solid rgba(255,255,255,0.12)', borderRadius:12, color:'#fff', fontSize:15, outline:'none', marginBottom:12, appearance:'none' as const },
   btn: { width:'100%', padding:'14px', background:'#4E9EFF', border:'none', borderRadius:12, color:'#fff', fontSize:15, fontWeight:600, cursor:'pointer' },
   btnGhost: { width:'100%', padding:'12px', background:'transparent', border:'0.5px solid rgba(255,255,255,0.15)', borderRadius:12, color:'rgba(255,255,255,0.6)', fontSize:14, cursor:'pointer', marginTop:8 },
-  nav: { position:'absolute' as const, bottom:0, left:0, right:0, background:'#0D0E14', borderTop:'0.5px solid rgba(255,255,255,0.07)', display:'grid', gridTemplateColumns:'repeat(4,1fr)', zIndex:100 },
-  navBtn: { padding:'10px 0 8px', border:'none', background:'transparent', color:'rgba(255,255,255,0.3)', fontSize:10, fontFamily:"'DM Sans',sans-serif", cursor:'pointer', display:'flex', flexDirection:'column' as const, alignItems:'center', gap:4 },
+  nav: { position:'absolute' as const, bottom:0, left:0, right:0, background:'#0D0E14', borderTop:'0.5px solid rgba(255,255,255,0.07)', display:'grid', gridTemplateColumns:'repeat(5,1fr)', zIndex:100 },
+  navBtn: { padding:'8px 0 6px', border:'none', background:'transparent', color:'rgba(255,255,255,0.3)', fontSize:9, fontFamily:"'DM Sans',sans-serif", cursor:'pointer', display:'flex', flexDirection:'column' as const, alignItems:'center', gap:3 },
 }
+
+// ─── LOGIN ─────────────────────────────────────────────────────────────────
 
 function LoginScreen() {
   const [email, setEmail] = useState('')
@@ -91,13 +116,13 @@ function LoginScreen() {
       if (isReg) await createUserWithEmailAndPassword(auth, email, pass)
       else await signInWithEmailAndPassword(auth, email, pass)
     } catch (e: unknown) {
-      const code = (e as { code?: string }).code ?? ''
+      const code = (e as {code?:string}).code ?? ''
       const msgs: Record<string,string> = {
         'auth/invalid-email':'E-mail invalido','auth/wrong-password':'Senha incorreta',
         'auth/user-not-found':'Usuario nao encontrado','auth/email-already-in-use':'E-mail ja cadastrado',
         'auth/weak-password':'Senha fraca (min. 6 caracteres)','auth/invalid-credential':'E-mail ou senha incorretos',
       }
-      setErr(msgs[code] || 'Erro ao entrar. Tente novamente.')
+      setErr(msgs[code]||'Erro ao entrar.')
     }
     setLoading(false)
   }
@@ -106,17 +131,18 @@ function LoginScreen() {
     <div style={{ height:'100%', display:'flex', flexDirection:'column', justifyContent:'center', padding:'32px 24px', background:'#0A0B0F' }}>
       <div style={{ marginBottom:40 }}>
         <div style={{ fontSize:11, color:'#4E9EFF', letterSpacing:'0.15em', textTransform:'uppercase', fontFamily:"'DM Mono',monospace", marginBottom:8 }}>Financeiro Pessoal</div>
-        <div style={{ fontSize:28, fontWeight:600, letterSpacing:'-0.02em' }}>{isReg ? 'Criar conta' : 'Bem-vindo de volta'}</div>
-        <div style={{ fontSize:14, color:'rgba(255,255,255,0.4)', marginTop:6 }}>{isReg ? 'Preencha os dados para comecar' : 'Entre com seu e-mail e senha'}</div>
+        <div style={{ fontSize:28, fontWeight:600, letterSpacing:'-0.02em' }}>{isReg?'Criar conta':'Bem-vindo de volta'}</div>
       </div>
       <input style={S.input} placeholder="E-mail" type="email" value={email} onChange={e => setEmail(e.target.value)} />
-      <input style={S.input} placeholder="Senha" type="password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key==='Enter' && handle()} />
+      <input style={S.input} placeholder="Senha" type="password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key==='Enter'&&handle()} />
       {err && <div style={{ color:'#E24B4A', fontSize:13, marginBottom:12, textAlign:'center' }}>{err}</div>}
       <button style={{ ...S.btn, opacity:loading?0.6:1 }} onClick={handle} disabled={loading}>{loading?'Aguarde...':isReg?'Criar conta':'Entrar'}</button>
-      <button style={S.btnGhost} onClick={() => { setIsReg(!isReg); setErr('') }}>{isReg ? 'Ja tenho conta' : 'Criar nova conta'}</button>
+      <button style={S.btnGhost} onClick={() => { setIsReg(!isReg); setErr('') }}>{isReg?'Ja tenho conta':'Criar nova conta'}</button>
     </div>
   )
 }
+
+// ─── PAINEL ────────────────────────────────────────────────────────────────
 
 function PainelScreen({ uid }: { uid: string }) {
   const [txs, setTxs] = useState<Transaction[]>([])
@@ -130,8 +156,8 @@ function PainelScreen({ uid }: { uid: string }) {
       getDocs(query(collection(db,'users',uid,'transactions'), orderBy('createdAt','desc'))),
       getDocs(query(collection(db,'users',uid,'accountEntries'), orderBy('createdAt','desc'))),
     ])
-    setTxs(txSnap.docs.map(d => ({ id:d.id, ...d.data() } as Transaction)))
-    setEntries(entSnap.docs.map(d => ({ id:d.id, ...d.data() } as AccountEntry)))
+    setTxs(txSnap.docs.map(d => ({ id:d.id,...d.data() } as Transaction)))
+    setEntries(entSnap.docs.map(d => ({ id:d.id,...d.data() } as AccountEntry)))
     setLoading(false)
   }, [uid])
 
@@ -154,10 +180,10 @@ function PainelScreen({ uid }: { uid: string }) {
   const varPatrimonio = patrimonioPrev>0 ? ((patrimonioAtual-patrimonioPrev)/patrimonioPrev)*100 : 0
   const meta10pct = patrimonioPrev*(10/12/100)
 
-  const catTotals = (Object.keys(CATEGORIES) as Category[]).map(cat => ({
-    cat, total: thisMonthTxs.filter(t => t.type==='expense'&&t.category===cat).reduce((s,t) => s+t.value, 0),
-    color: CATEGORIES[cat].color, budget: CATEGORIES[cat].budget,
-  })).filter(c => c.total>0)
+  // group expenses by category for this month
+  const catMap: Record<string,number> = {}
+  thisMonthTxs.filter(t => t.type==='expense').forEach(t => { catMap[t.category]=(catMap[t.category]||0)+t.value })
+  const catData = Object.entries(catMap).sort((a,b) => b[1]-a[1]).slice(0,5).map(([cat,total]) => ({ cat, total }))
 
   const allMonths = [...new Set(entries.map(e => e.month))].sort().slice(-6)
   const chartData = allMonths.map(m => ({
@@ -171,7 +197,7 @@ function PainelScreen({ uid }: { uid: string }) {
     <div style={S.screen}>
       <div style={{ marginBottom:16 }}>
         <div style={S.label}>Saldo do mes</div>
-        <div style={{ ...S.bigVal, color:saldo>=0?'#00E5A0':'#E24B4A' }}>{fmt(saldo)}</div>
+        <div style={{ fontSize:30, fontWeight:600, color:saldo>=0?'#00E5A0':'#E24B4A', letterSpacing:'-0.02em' }}>{fmt(saldo)}</div>
         <div style={{ display:'flex', gap:16, marginTop:8 }}>
           <span style={{ fontSize:12, color:'#00E5A0' }}>+{fmt(renda)} receitas</span>
           <span style={{ fontSize:12, color:'#E24B4A' }}>-{fmt(totalGasto)} gastos</span>
@@ -183,18 +209,16 @@ function PainelScreen({ uid }: { uid: string }) {
         <div style={{ fontSize:24, fontWeight:600, marginBottom:8 }}>{patrimonioAtual>0?fmt(patrimonioAtual):'...'}</div>
         {patrimonioPrev>0 && (
           <div style={{ display:'flex', gap:8 }}>
-            <div style={{ flex:1, background:'#1C1D25', borderRadius:10, padding:10 }}>
-              <div style={S.muted}>Rendimento</div>
-              <div style={{ fontSize:14, fontWeight:500, color:rendimentoRS>=0?'#00E5A0':'#E24B4A', marginTop:2 }}>{rendimentoRS>=0?'+':''}{fmt(rendimentoRS)}</div>
-            </div>
-            <div style={{ flex:1, background:'#1C1D25', borderRadius:10, padding:10 }}>
-              <div style={S.muted}>Variacao</div>
-              <div style={{ fontSize:14, fontWeight:500, color:varPatrimonio>=0?'#00E5A0':'#E24B4A', marginTop:2 }}>{varPatrimonio>=0?'+':''}{varPatrimonio.toFixed(2)}%</div>
-            </div>
-            <div style={{ flex:1, background:'#1C1D25', borderRadius:10, padding:10 }}>
-              <div style={S.muted}>Meta 10%</div>
-              <div style={{ fontSize:14, fontWeight:500, color:'#FF9F43', marginTop:2 }}>{fmt(meta10pct)}</div>
-            </div>
+            {[
+              { label:'Rendimento', val:fmt(rendimentoRS), color:rendimentoRS>=0?'#00E5A0':'#E24B4A', pre:rendimentoRS>=0?'+':'' },
+              { label:'Variacao', val:`${varPatrimonio.toFixed(2)}%`, color:varPatrimonio>=0?'#00E5A0':'#E24B4A', pre:varPatrimonio>=0?'+':'' },
+              { label:'Meta 10%', val:fmt(meta10pct), color:'#FF9F43', pre:'' },
+            ].map((item,i) => (
+              <div key={i} style={{ flex:1, background:'#1C1D25', borderRadius:10, padding:10 }}>
+                <div style={S.muted}>{item.label}</div>
+                <div style={{ fontSize:13, fontWeight:500, color:item.color, marginTop:2 }}>{item.pre}{item.val}</div>
+              </div>
+            ))}
           </div>
         )}
         {patrimonioAtual===0 && <div style={{ ...S.muted, textAlign:'center', padding:'8px 0' }}>Atualize os saldos na aba Contas</div>}
@@ -203,45 +227,37 @@ function PainelScreen({ uid }: { uid: string }) {
       {chartData.length>1 && (
         <div style={S.card}>
           <div style={S.label}>Evolucao do patrimonio</div>
-          <div style={{ height:160, marginTop:12 }}>
+          <div style={{ height:140, marginTop:10 }}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData}>
                 <defs>
-                  <linearGradient id="gradPat" x1="0" y1="0" x2="0" y2="1">
+                  <linearGradient id="gP" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#4E9EFF" stopOpacity={0.3} />
                     <stop offset="95%" stopColor="#4E9EFF" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)', fontSize:10 }} axisLine={false} tickLine={false} />
+                <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)',fontSize:10 }} axisLine={false} tickLine={false} />
                 <YAxis hide />
-                <Tooltip contentStyle={{ background:'#1C1D25', border:'none', borderRadius:10, color:'#fff', fontSize:12 }} formatter={(value: number) => [fmt(value),'Patrimonio']} />
-                <Area type="monotone" dataKey="patrimonio" stroke="#4E9EFF" strokeWidth={2} fill="url(#gradPat)" />
+                <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v),'Patrimonio']} />
+                <Area type="monotone" dataKey="patrimonio" stroke="#4E9EFF" strokeWidth={2} fill="url(#gP)" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
         </div>
       )}
 
-      {catTotals.length>0 && (
+      {catData.length>0 && (
         <div style={S.card}>
-          <div style={S.label}>Gastos do mes</div>
-          <div style={{ display:'flex', gap:12, marginTop:8 }}>
-            <div style={{ width:120, height:120, flexShrink:0 }}>
-              <PieChart width={120} height={120}>
-                <Pie data={catTotals} cx={55} cy={55} innerRadius={36} outerRadius={54} dataKey="total" paddingAngle={3}>
-                  {catTotals.map((c,i) => <Cell key={i} fill={c.color} />)}
-                </Pie>
-              </PieChart>
-            </div>
-            <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', gap:6 }}>
-              {catTotals.map((c,i) => (
-                <div key={i} style={{ display:'flex', alignItems:'center', gap:8 }}>
-                  <div style={{ width:8, height:8, borderRadius:'50%', background:c.color, flexShrink:0 }} />
-                  <div style={{ flex:1, fontSize:12, color:'rgba(255,255,255,0.6)' }}>{c.cat}</div>
-                  <div style={{ fontSize:12, fontWeight:500 }}>{fmt(c.total)}</div>
-                </div>
-              ))}
-            </div>
+          <div style={S.label}>Top categorias do mes</div>
+          <div style={{ height:140, marginTop:10 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={catData} layout="vertical">
+                <XAxis type="number" hide />
+                <YAxis type="category" dataKey="cat" tick={{ fill:'rgba(255,255,255,0.5)',fontSize:11 }} axisLine={false} tickLine={false} width={80} />
+                <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v)]} />
+                <Bar dataKey="total" fill="#4E9EFF" radius={[0,6,6,0]} />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </div>
       )}
@@ -257,23 +273,37 @@ function PainelScreen({ uid }: { uid: string }) {
   )
 }
 
+// ─── GASTOS ────────────────────────────────────────────────────────────────
+
 function GastosScreen({ uid }: { uid: string }) {
-  const [tab, setTab] = useState<'add'|'list'>('add')
+  const [tab, setTab] = useState<'add'|'fixos'|'list'>('add')
   const [txs, setTxs] = useState<Transaction[]>([])
+  const [fixedExpenses, setFixedExpenses] = useState<FixedExpense[]>([])
+  const [fixedPayments, setFixedPayments] = useState<FixedPayment[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [tipo, setTipo] = useState<'expense'|'income'>('expense')
   const [valor, setValor] = useState('')
   const [desc, setDesc] = useState('')
-  const [cat, setCat] = useState<Category>('Conforto')
+  const [cat, setCat] = useState('')
   const [conta, setConta] = useState(ACCOUNTS[0])
   const [data, setData] = useState(todayStr())
   const [msg, setMsg] = useState('')
-  const [filterCat, setFilterCat] = useState('Todos')
+  // new fixed expense form
+  const [newFixName, setNewFixName] = useState('')
+  const [newFixAmt, setNewFixAmt] = useState('')
+  const [newFixCat, setNewFixCat] = useState('')
+  const [fixMsg, setFixMsg] = useState('')
+  const mk = currentMonthKey()
 
   const load = useCallback(async () => {
-    const snap = await getDocs(query(collection(db,'users',uid,'transactions'), orderBy('createdAt','desc')))
-    setTxs(snap.docs.map(d => ({ id:d.id, ...d.data() } as Transaction)))
+    const [txSnap, fxSnap, fpSnap] = await Promise.all([
+      getDocs(query(collection(db,'users',uid,'transactions'), orderBy('createdAt','desc'))),
+      getDocs(query(collection(db,'users',uid,'fixedExpenses'), orderBy('createdAt','asc'))),
+      getDocs(query(collection(db,'users',uid,'fixedPayments'), orderBy('createdAt','desc'))),
+    ])
+    setTxs(txSnap.docs.map(d => ({ id:d.id,...d.data() } as Transaction)))
+    setFixedExpenses(fxSnap.docs.map(d => ({ id:d.id,...d.data() } as FixedExpense)))
+    setFixedPayments(fpSnap.docs.map(d => ({ id:d.id,...d.data() } as FixedPayment)))
     setLoading(false)
   }, [uid])
 
@@ -284,11 +314,10 @@ function GastosScreen({ uid }: { uid: string }) {
     if (!v||v<=0||!desc.trim()) { setMsg('Preencha valor e descricao'); return }
     setSaving(true)
     await addDoc(collection(db,'users',uid,'transactions'), {
-      type:tipo, value:v, description:desc.trim(),
-      category:tipo==='income'?'Outros':cat,
-      account:conta, date:data, createdAt:Date.now(),
+      type:'expense', value:v, description:desc.trim(),
+      category:cat.trim()||'Outros', account:conta, date:data, createdAt:Date.now(),
     })
-    setValor(''); setDesc(''); setMsg('Salvo!')
+    setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
     setTimeout(() => setMsg(''), 2000)
     setSaving(false)
     load()
@@ -299,37 +328,67 @@ function GastosScreen({ uid }: { uid: string }) {
     load()
   }
 
-  const filtered = filterCat==='Todos' ? txs : txs.filter(t => t.category===filterCat)
+  const addFixed = async () => {
+    const v = parseFloat(newFixAmt.replace(',','.'))
+    if (!newFixName.trim()||!v||v<=0) { setFixMsg('Preencha nome e valor'); return }
+    await addDoc(collection(db,'users',uid,'fixedExpenses'), {
+      name:newFixName.trim(), amount:v, category:newFixCat.trim()||'Fixo', createdAt:Date.now(),
+    })
+    setNewFixName(''); setNewFixAmt(''); setNewFixCat('')
+    setFixMsg('Gasto fixo adicionado!')
+    setTimeout(() => setFixMsg(''), 2000)
+    load()
+  }
+
+  const deleteFixed = async (id: string) => {
+    await deleteDoc(doc(db,'users',uid,'fixedExpenses',id))
+    load()
+  }
+
+  const togglePaid = async (fx: FixedExpense) => {
+    const payId = `${fx.id}_${mk}`
+    const existing = fixedPayments.find(p => p.fixedExpenseId===fx.id && p.month===mk)
+    if (existing) {
+      // unpay
+      await deleteDoc(doc(db,'users',uid,'fixedPayments',existing.id))
+      // also remove transaction if exists
+      const relatedTx = txs.find(t => t.description===`[FIXO] ${fx.name}` && t.date.endsWith(mk.split('-').reverse().join('/')))
+      if (relatedTx) await deleteDoc(doc(db,'users',uid,'transactions',relatedTx.id))
+    } else {
+      // mark paid
+      await setDoc(doc(db,'users',uid,'fixedPayments',payId), {
+        fixedExpenseId:fx.id, month:mk, paid:true, paidAt:Date.now(),
+      })
+      // create transaction
+      const [y,m] = mk.split('-')
+      await addDoc(collection(db,'users',uid,'transactions'), {
+        type:'expense', value:fx.amount, description:`[FIXO] ${fx.name}`,
+        category:fx.category, account:conta, date:`01/${m}/${y}`, createdAt:Date.now(),
+      })
+    }
+    load()
+  }
+
+  const expenseTxs = txs.filter(t => t.type==='expense')
+
   if (loading) return <LoadingScreen />
 
   return (
     <div style={S.screen}>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, marginBottom:16 }}>
-        {(['add','list'] as const).map(t => (
-          <button key={t} onClick={() => setTab(t)} style={{ padding:'10px', borderRadius:10, border:'none', cursor:'pointer', fontSize:14, fontWeight:tab===t?600:400, background:tab===t?'#4E9EFF':'#13141A', color:tab===t?'#fff':'rgba(255,255,255,0.4)' }}>
-            {t==='add'?'Novo lancamento':`Historico (${txs.length})`}
-          </button>
+      <div style={{ display:'flex', gap:6, marginBottom:16 }}>
+        {([['add','Novo'],['fixos','Fixos'],['list',`Historico (${expenseTxs.length})`]] as const).map(([k,label]) => (
+          <button key={k} onClick={() => setTab(k)} style={{ flex:1, padding:'10px 4px', borderRadius:10, border:'none', cursor:'pointer', fontSize:12, fontWeight:tab===k?600:400, background:tab===k?'#4E9EFF':'#13141A', color:tab===k?'#fff':'rgba(255,255,255,0.4)' }}>{label}</button>
         ))}
       </div>
 
-      {tab==='add' ? (
+      {tab==='add' && (
         <>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, marginBottom:12 }}>
-            <button onClick={() => setTipo('expense')} style={{ padding:'12px', borderRadius:12, cursor:'pointer', fontSize:14, fontWeight:500, background:tipo==='expense'?'rgba(226,75,74,0.15)':'#13141A', color:tipo==='expense'?'#E24B4A':'rgba(255,255,255,0.4)', border:tipo==='expense'?'0.5px solid rgba(226,75,74,0.4)':'0.5px solid transparent' }}>Gasto</button>
-            <button onClick={() => setTipo('income')} style={{ padding:'12px', borderRadius:12, cursor:'pointer', fontSize:14, fontWeight:500, background:tipo==='income'?'rgba(0,229,160,0.1)':'#13141A', color:tipo==='income'?'#00E5A0':'rgba(255,255,255,0.4)', border:tipo==='income'?'0.5px solid rgba(0,229,160,0.3)':'0.5px solid transparent' }}>Receita</button>
-          </div>
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
           <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={valor} onChange={e => setValor(e.target.value)} />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Descricao</div>
           <input style={S.input} placeholder="Ex: Mercado, Uber..." value={desc} onChange={e => setDesc(e.target.value)} />
-          {tipo==='expense' && (
-            <>
-              <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
-              <select style={S.select} value={cat} onChange={e => setCat(e.target.value as Category)}>
-                {(Object.keys(CATEGORIES) as Category[]).map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </>
-          )}
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria (livre)</div>
+          <input style={S.input} placeholder="Ex: Alimentacao, Saude..." value={cat} onChange={e => setCat(e.target.value)} />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
           <select style={S.select} value={conta} onChange={e => setConta(e.target.value)}>
             {ACCOUNTS.map(a => <option key={a} value={a}>{a}</option>)}
@@ -337,17 +396,184 @@ function GastosScreen({ uid }: { uid: string }) {
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Data</div>
           <input style={S.input} placeholder="dd/mm/aaaa" value={data} onChange={e => setData(e.target.value)} />
           {msg && <div style={{ textAlign:'center', fontSize:13, color:msg==='Salvo!'?'#00E5A0':'#E24B4A', marginBottom:8 }}>{msg}</div>}
-          <button style={{ ...S.btn, opacity:saving?0.6:1 }} onClick={salvar} disabled={saving}>{saving?'Salvando...':'Salvar lancamento'}</button>
+          <button style={{ ...S.btn, opacity:saving?0.6:1 }} onClick={salvar} disabled={saving}>{saving?'Salvando...':'Salvar gasto'}</button>
         </>
-      ) : (
+      )}
+
+      {tab==='fixos' && (
         <>
-          <div style={{ display:'flex', gap:6, overflowX:'auto', marginBottom:12, paddingBottom:4, scrollbarWidth:'none' }}>
-            {['Todos',...(Object.keys(CATEGORIES) as Category[])].map(c => (
-              <button key={c} onClick={() => setFilterCat(c)} style={{ padding:'6px 14px', borderRadius:20, border:'none', cursor:'pointer', fontSize:12, whiteSpace:'nowrap', background:filterCat===c?'#4E9EFF':'#13141A', color:filterCat===c?'#fff':'rgba(255,255,255,0.4)' }}>{c}</button>
-            ))}
+          <div style={{ ...S.label, marginBottom:8 }}>Gastos fixos — {monthLabel(mk)}</div>
+          {fixedExpenses.length===0
+            ? <div style={{ ...S.muted, textAlign:'center', padding:'16px 0' }}>Nenhum gasto fixo cadastrado ainda</div>
+            : <div style={S.card}>
+                {fixedExpenses.map(fx => {
+                  const paid = fixedPayments.some(p => p.fixedExpenseId===fx.id && p.month===mk)
+                  return (
+                    <div key={fx.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 0', borderBottom:'0.5px solid rgba(255,255,255,0.05)' }}>
+                      <button onClick={() => togglePaid(fx)} style={{
+                        width:24, height:24, borderRadius:6, border:'none', cursor:'pointer', flexShrink:0,
+                        background:paid?'#00E5A0':'rgba(255,255,255,0.1)',
+                        display:'flex', alignItems:'center', justifyContent:'center',
+                      }}>
+                        {paid && <span style={{ color:'#0A0B0F', fontSize:14, fontWeight:700 }}>&#10003;</span>}
+                      </button>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontSize:13, fontWeight:500, color:paid?'rgba(255,255,255,0.4)':'#fff', textDecoration:paid?'line-through':'none' }}>{fx.name}</div>
+                        <div style={{ fontSize:10, color:'rgba(255,255,255,0.3)' }}>{fx.category}</div>
+                      </div>
+                      <div style={{ fontSize:13, fontWeight:500, color:paid?'rgba(255,255,255,0.35)':'#E24B4A' }}>{fmt(fx.amount)}</div>
+                      <button onClick={() => deleteFixed(fx.id)} style={{ background:'none', border:'none', color:'rgba(255,255,255,0.2)', cursor:'pointer', fontSize:16, padding:'0 2px' }}>x</button>
+                    </div>
+                  )
+                })}
+                <div style={{ paddingTop:10, display:'flex', justifyContent:'space-between' }}>
+                  <div style={S.muted}>Total</div>
+                  <div style={{ fontSize:13, fontWeight:500 }}>{fmt(fixedExpenses.reduce((s,f) => s+f.amount,0))}</div>
+                </div>
+              </div>
+          }
+
+          <div style={{ ...S.label, marginTop:16, marginBottom:8 }}>Adicionar gasto fixo</div>
+          <div style={S.card}>
+            <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Nome</div>
+            <input style={S.input} placeholder="Ex: Aluguel, Luz, Netflix..." value={newFixName} onChange={e => setNewFixName(e.target.value)} />
+            <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
+            <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={newFixAmt} onChange={e => setNewFixAmt(e.target.value)} />
+            <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
+            <input style={{ ...S.input, marginBottom:0 }} placeholder="Ex: Moradia, Servicos..." value={newFixCat} onChange={e => setNewFixCat(e.target.value)} />
+            {fixMsg && <div style={{ textAlign:'center', fontSize:12, color:fixMsg.includes('!')?'#00E5A0':'#E24B4A', margin:'8px 0' }}>{fixMsg}</div>}
+            <button style={{ ...S.btn, marginTop:12 }} onClick={addFixed}>Adicionar</button>
           </div>
+        </>
+      )}
+
+      {tab==='list' && (
+        expenseTxs.length===0
+          ? <div style={{ ...S.muted, textAlign:'center', padding:'40px 0' }}>Nenhum gasto</div>
+          : <div style={S.card}>{expenseTxs.map(t => <TxRow key={t.id} tx={t} onDelete={() => deletar(t.id)} />)}</div>
+      )}
+    </div>
+  )
+}
+
+// ─── RECEITAS ──────────────────────────────────────────────────────────────
+
+function ReceitasScreen({ uid }: { uid: string }) {
+  const [tab, setTab] = useState<'add'|'list'>('add')
+  const [txs, setTxs] = useState<Transaction[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [valor, setValor] = useState('')
+  const [desc, setDesc] = useState('')
+  const [cat, setCat] = useState('')
+  const [conta, setConta] = useState(ACCOUNTS[0])
+  const [data, setData] = useState(todayStr())
+  const [msg, setMsg] = useState('')
+  const [filterMonth, setFilterMonth] = useState(currentMonthKey())
+  const allMonths = generateMonths()
+
+  const load = useCallback(async () => {
+    const snap = await getDocs(query(collection(db,'users',uid,'transactions'), orderBy('createdAt','desc')))
+    const all = snap.docs.map(d => ({ id:d.id,...d.data() } as Transaction))
+    setTxs(all.filter(t => t.type==='income'))
+    setLoading(false)
+  }, [uid])
+
+  useEffect(() => { load() }, [load])
+
+  const salvar = async () => {
+    const v = parseFloat(valor.replace(',','.'))
+    if (!v||v<=0||!desc.trim()) { setMsg('Preencha valor e descricao'); return }
+    setSaving(true)
+    await addDoc(collection(db,'users',uid,'transactions'), {
+      type:'income', value:v, description:desc.trim(),
+      category:cat.trim()||'Receita', account:conta, date:data, createdAt:Date.now(),
+    })
+    setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
+    setTimeout(() => setMsg(''), 2000)
+    setSaving(false)
+    load()
+  }
+
+  const deletar = async (id: string) => {
+    await deleteDoc(doc(db,'users',uid,'transactions',id))
+    load()
+  }
+
+  // group by month for history
+  const filtered = txs.filter(t => {
+    const p = t.date.split('/')
+    const mk = `${p[2]}-${p[1]}`
+    return mk===filterMonth
+  })
+
+  const totalFiltered = filtered.reduce((s,t) => s+t.value, 0)
+
+  // monthly summary for chart
+  const monthMap: Record<string,number> = {}
+  txs.forEach(t => {
+    const p = t.date.split('/')
+    const mk = `${p[2]}-${p[1]}`
+    monthMap[mk]=(monthMap[mk]||0)+t.value
+  })
+  const chartData = Object.entries(monthMap).sort((a,b) => a[0].localeCompare(b[0])).slice(-6).map(([m,v]) => ({ name:monthLabel(m), total:v }))
+
+  if (loading) return <LoadingScreen />
+
+  return (
+    <div style={S.screen}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, marginBottom:16 }}>
+        {([['add','Nova receita'],['list','Historico']] as const).map(([k,label]) => (
+          <button key={k} onClick={() => setTab(k)} style={{ padding:'10px', borderRadius:10, border:'none', cursor:'pointer', fontSize:14, fontWeight:tab===k?600:400, background:tab===k?'#00E5A0':'#13141A', color:tab===k?'#0A0B0F':'rgba(255,255,255,0.4)' }}>{label}</button>
+        ))}
+      </div>
+
+      {tab==='add' && (
+        <>
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
+          <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={valor} onChange={e => setValor(e.target.value)} />
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Descricao</div>
+          <input style={S.input} placeholder="Ex: Salario, Freelance..." value={desc} onChange={e => setDesc(e.target.value)} />
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria (livre)</div>
+          <input style={S.input} placeholder="Ex: Salario, Dividendos..." value={cat} onChange={e => setCat(e.target.value)} />
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
+          <select style={S.select} value={conta} onChange={e => setConta(e.target.value)}>
+            {ACCOUNTS.map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Data</div>
+          <input style={S.input} placeholder="dd/mm/aaaa" value={data} onChange={e => setData(e.target.value)} />
+          {msg && <div style={{ textAlign:'center', fontSize:13, color:msg==='Salvo!'?'#00E5A0':'#E24B4A', marginBottom:8 }}>{msg}</div>}
+          <button style={{ ...S.btn, background:'#00E5A0', color:'#0A0B0F', opacity:saving?0.6:1 }} onClick={salvar} disabled={saving}>{saving?'Salvando...':'Salvar receita'}</button>
+        </>
+      )}
+
+      {tab==='list' && (
+        <>
+          {chartData.length>1 && (
+            <div style={{ ...S.card, marginBottom:12 }}>
+              <div style={S.label}>Receitas por mes</div>
+              <div style={{ height:120, marginTop:8 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData}>
+                    <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)',fontSize:10 }} axisLine={false} tickLine={false} />
+                    <YAxis hide />
+                    <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v),'Receitas']} />
+                    <Bar dataKey="total" fill="#00E5A0" radius={[4,4,0,0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12 }}>
+            <select value={filterMonth} onChange={e => setFilterMonth(e.target.value)} style={{ ...S.select, marginBottom:0, flex:1 }}>
+              {allMonths.map(m => <option key={m} value={m} style={{ background:'#13141A' }}>{monthLabel(m)}</option>)}
+            </select>
+            <div style={{ fontSize:13, fontWeight:600, color:'#00E5A0', whiteSpace:'nowrap' }}>{fmt(totalFiltered)}</div>
+          </div>
+
           {filtered.length===0
-            ? <div style={{ ...S.muted, textAlign:'center', padding:'40px 0' }}>Nenhum lancamento</div>
+            ? <div style={{ ...S.muted, textAlign:'center', padding:'32px 0' }}>Nenhuma receita em {monthLabel(filterMonth)}</div>
             : <div style={S.card}>{filtered.map(t => <TxRow key={t.id} tx={t} onDelete={() => deletar(t.id)} />)}</div>
           }
         </>
@@ -355,6 +581,8 @@ function GastosScreen({ uid }: { uid: string }) {
     </div>
   )
 }
+
+// ─── CONTAS ────────────────────────────────────────────────────────────────
 
 function ContasScreen({ uid }: { uid: string }) {
   const allMonths = generateMonths()
@@ -387,11 +615,11 @@ function ContasScreen({ uid }: { uid: string }) {
 
   const load = useCallback(async () => {
     const snap = await getDocs(query(collection(db,'users',uid,'accountEntries'), orderBy('createdAt','desc')))
-    const data = snap.docs.map(d => ({ id:d.id, ...d.data() } as AccountEntry))
+    const data = snap.docs.map(d => ({ id:d.id,...d.data() } as AccountEntry))
     setEntries(data)
     const current = data.filter(e => e.month===selectedMonth)
     const init: Record<string,string> = {}
-    current.forEach(e => { init[e.account] = String(e.balance) })
+    current.forEach(e => { init[e.account]=String(e.balance) })
     setBalances(init)
   }, [uid, selectedMonth])
 
@@ -418,8 +646,7 @@ function ContasScreen({ uid }: { uid: string }) {
     const cleaned = editNames.map(n => n.trim()).filter(n => n.length>0)
     const final = newAccount.trim() ? [...cleaned, newAccount.trim()] : cleaned
     await saveAccountsList(final)
-    setNewAccount('')
-    setEditMode(false)
+    setNewAccount(''); setEditMode(false)
     setMsg('Contas atualizadas!')
     setTimeout(() => setMsg(''), 2000)
   }
@@ -434,7 +661,7 @@ function ContasScreen({ uid }: { uid: string }) {
 
   const prevEntries = entries.filter(e => e.month===pmk)
   const prevMap: Record<string,number> = {}
-  prevEntries.forEach(e => { prevMap[e.account] = e.balance })
+  prevEntries.forEach(e => { prevMap[e.account]=e.balance })
 
   const totalAtual = accounts.reduce((s,a) => s+(parseFloat(balances[a]?.replace(',','.')||'0')||0), 0)
   const totalPrev = prevEntries.reduce((s,e) => s+e.balance, 0)
@@ -456,7 +683,7 @@ function ContasScreen({ uid }: { uid: string }) {
           </select>
         </div>
         <button onClick={() => { setEditMode(!editMode); setEditNames([...accounts]) }} style={{ background:editMode?'#4E9EFF22':'#13141A', border:editMode?'0.5px solid #4E9EFF':'0.5px solid rgba(255,255,255,0.15)', color:editMode?'#4E9EFF':'rgba(255,255,255,0.5)', borderRadius:10, padding:'6px 14px', fontSize:12, cursor:'pointer' }}>
-          {editMode ? 'Cancelar' : 'Editar contas'}
+          {editMode?'Cancelar':'Editar contas'}
         </button>
       </div>
 
@@ -496,19 +723,19 @@ function ContasScreen({ uid }: { uid: string }) {
           {chartData.length>1 && (
             <div style={{ ...S.card, marginBottom:12 }}>
               <div style={S.label}>Historico</div>
-              <div style={{ height:120, marginTop:8 }}>
+              <div style={{ height:110, marginTop:8 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={chartData}>
                     <defs>
-                      <linearGradient id="gradCont" x1="0" y1="0" x2="0" y2="1">
+                      <linearGradient id="gC" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor="#00E5A0" stopOpacity={0.25} />
                         <stop offset="95%" stopColor="#00E5A0" stopOpacity={0} />
                       </linearGradient>
                     </defs>
-                    <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)', fontSize:10 }} axisLine={false} tickLine={false} />
+                    <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)',fontSize:10 }} axisLine={false} tickLine={false} />
                     <YAxis hide />
-                    <Tooltip contentStyle={{ background:'#1C1D25', border:'none', borderRadius:10, color:'#fff', fontSize:12 }} formatter={(value: number) => [fmt(value),'Patrimonio']} />
-                    <Area type="monotone" dataKey="total" stroke="#00E5A0" strokeWidth={2} fill="url(#gradCont)" />
+                    <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v),'Patrimonio']} />
+                    <Area type="monotone" dataKey="total" stroke="#00E5A0" strokeWidth={2} fill="url(#gC)" />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
@@ -545,6 +772,8 @@ function ContasScreen({ uid }: { uid: string }) {
   )
 }
 
+// ─── RELATÓRIO ─────────────────────────────────────────────────────────────
+
 function RelatorioScreen({ uid }: { uid: string }) {
   const [txs, setTxs] = useState<Transaction[]>([])
   const [entries, setEntries] = useState<AccountEntry[]>([])
@@ -558,8 +787,8 @@ function RelatorioScreen({ uid }: { uid: string }) {
       getDocs(query(collection(db,'users',uid,'transactions'), orderBy('createdAt','desc'))),
       getDocs(query(collection(db,'users',uid,'accountEntries'), orderBy('createdAt','desc'))),
     ]).then(([txSnap,entSnap]) => {
-      setTxs(txSnap.docs.map(d => ({ id:d.id, ...d.data() } as Transaction)))
-      setEntries(entSnap.docs.map(d => ({ id:d.id, ...d.data() } as AccountEntry)))
+      setTxs(txSnap.docs.map(d => ({ id:d.id,...d.data() } as Transaction)))
+      setEntries(entSnap.docs.map(d => ({ id:d.id,...d.data() } as AccountEntry)))
     })
   }, [uid])
 
@@ -577,11 +806,11 @@ function RelatorioScreen({ uid }: { uid: string }) {
   const varPct = patrimonioPrev>0 ? ((rendimento/patrimonioPrev)*100) : 0
   const meta10 = patrimonioPrev*(10/12/100)
 
-  const catTotals = (Object.keys(CATEGORIES) as Category[]).map(cat => ({
-    cat, total:thisMonthTxs.filter(t => t.type==='expense'&&t.category===cat).reduce((s,t) => s+t.value, 0),
-  })).sort((a,b) => b.total-a.total)
+  const catMap: Record<string,number> = {}
+  thisMonthTxs.filter(t => t.type==='expense').forEach(t => { catMap[t.category]=(catMap[t.category]||0)+t.value })
+  const catTotals = Object.entries(catMap).sort((a,b) => b[1]-a[1])
 
-  const top5 = [...thisMonthTxs].filter(t => t.type==='expense').sort((a,b) => b.value-a.value).slice(0,5)
+  const top5 = thisMonthTxs.filter(t => t.type==='expense').sort((a,b) => b.value-a.value).slice(0,5)
 
   const relatorio = `RELATORIO FINANCEIRO - ${monthLabel(selectedMonth)}
 Gerado em ${todayStr()}
@@ -602,24 +831,20 @@ SALDOS POR CONTA
 ${entries.filter(e => e.month===selectedMonth).map(e => `- ${e.account}: ${fmt(e.balance)}`).join('\n')}
 
 GASTOS POR CATEGORIA
-${catTotals.filter(c => c.total>0).map(c => `${c.cat}: ${fmt(c.total)}`).join('\n')}
+${catTotals.map(([c,v]) => `${c}: ${fmt(v)}`).join('\n')}
 
-TOP 5 MAIORES GASTOS
+TOP 5 GASTOS
 ${top5.map((t,i) => `${i+1}. ${t.description} - ${fmt(t.value)} [${t.category}]`).join('\n')}
 
 TODOS OS LANCAMENTOS
 ${thisMonthTxs.map(t => `${t.type==='income'?'+':'-'} ${fmt(t.value)} | ${t.description} | ${t.category} | ${t.date}`).join('\n')}
 `
 
-  const copiar = () => {
-    navigator.clipboard.writeText(relatorio).then(() => { setCopied(true); setTimeout(() => setCopied(false),2500) })
-  }
-
   return (
     <div style={S.screen}>
       <div style={{ marginBottom:16 }}>
         <div style={S.label}>Relatorio</div>
-        <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} style={{ background:'transparent', border:'none', color:'#fff', fontSize:20, fontWeight:600, cursor:'pointer', outline:'none', padding:'2px 0', fontFamily:"'DM Sans',sans-serif" }}>
+        <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} style={{ background:'transparent', border:'none', color:'#fff', fontSize:20, fontWeight:600, cursor:'pointer', outline:'none', fontFamily:"'DM Sans',sans-serif" }}>
           {allMonths.map(m => <option key={m} value={m} style={{ background:'#13141A' }}>{monthLabel(m)}</option>)}
         </select>
       </div>
@@ -639,20 +864,21 @@ ${thisMonthTxs.map(t => `${t.type==='income'?'+':'-'} ${fmt(t.value)} | ${t.desc
 
       <div style={S.card}>
         <div style={{ ...S.label, marginBottom:10 }}>Texto para IA</div>
-        <div style={{ background:'#0D0E14', borderRadius:10, padding:12, fontFamily:"'DM Mono',monospace", fontSize:10.5, color:'rgba(255,255,255,0.6)', lineHeight:1.7, maxHeight:220, overflowY:'auto', whiteSpace:'pre-wrap' }}>{relatorio}</div>
-        <button style={{ ...S.btn, marginTop:12, background:copied?'#00E5A0':'#4E9EFF' }} onClick={copiar}>{copied?'Copiado!':'Copiar relatorio'}</button>
+        <div style={{ background:'#0D0E14', borderRadius:10, padding:12, fontFamily:"'DM Mono',monospace", fontSize:10.5, color:'rgba(255,255,255,0.6)', lineHeight:1.7, maxHeight:200, overflowY:'auto', whiteSpace:'pre-wrap' }}>{relatorio}</div>
+        <button style={{ ...S.btn, marginTop:12, background:copied?'#00E5A0':'#4E9EFF' }} onClick={() => { navigator.clipboard.writeText(relatorio).then(() => { setCopied(true); setTimeout(() => setCopied(false),2500) }) }}>{copied?'Copiado!':'Copiar relatorio'}</button>
         <div style={{ ...S.muted, textAlign:'center', fontSize:11, marginTop:8 }}>Cole no ChatGPT ou Claude para analise</div>
       </div>
     </div>
   )
 }
 
+// ─── SHARED ────────────────────────────────────────────────────────────────
+
 function TxRow({ tx, onDelete }: { tx: Transaction; onDelete?: () => void }) {
   const isInc = tx.type==='income'
-  const color = isInc ? '#00E5A0' : (CATEGORIES[tx.category as Category]?.color||'#888')
   return (
     <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 0', borderBottom:'0.5px solid rgba(255,255,255,0.04)' }}>
-      <div style={{ width:8, height:8, borderRadius:'50%', background:color, flexShrink:0 }} />
+      <div style={{ width:8, height:8, borderRadius:'50%', background:isInc?'#00E5A0':'#E24B4A', flexShrink:0 }} />
       <div style={{ flex:1, minWidth:0 }}>
         <div style={{ fontSize:13, fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{tx.description}</div>
         <div style={{ fontSize:10, color:'rgba(255,255,255,0.35)' }}>{tx.category} | {tx.account} | {tx.date}</div>
@@ -665,24 +891,30 @@ function TxRow({ tx, onDelete }: { tx: Transaction; onDelete?: () => void }) {
 
 function LoadingScreen() {
   return (
-    <div style={{ height:'100%', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:12 }}>
+    <div style={{ height:'100%', display:'flex', alignItems:'center', justifyContent:'center' }}>
       <div style={{ width:36, height:36, border:'2px solid rgba(255,255,255,0.1)', borderTop:'2px solid #4E9EFF', borderRadius:'50%', animation:'spin 0.8s linear infinite' }} />
-      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   )
 }
 
-const NavIcon = ({ type }: { type: string }) => {
-  const icons: Record<string,string> = {
-    painel:'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z',
-    gastos:'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z',
-    contas:'M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9H9V9h10v2zm-4 4H9v-2h6v2zm4-8H9V5h10v2z',
-    relatorio:'M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z',
-  }
-  return <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d={icons[type]} /></svg>
+// ─── NAV ICONS ─────────────────────────────────────────────────────────────
+
+const icons: Record<string,string> = {
+  painel:'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z',
+  gastos:'M17 12h-5v5h5v-5zM16 1v2H8V1H6v2H5c-1.11 0-1.99.9-1.99 2L3 19c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-1V1h-2zm3 18H5V8h14v11z',
+  receitas:'M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z',
+  contas:'M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9H9V9h10v2zm-4 4H9v-2h6v2zm4-8H9V5h10v2z',
+  relatorio:'M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z',
 }
 
-type Screen = 'painel'|'gastos'|'contas'|'relatorio'
+const NavIcon = ({ type }: { type: string }) => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d={icons[type]} /></svg>
+)
+
+// ─── APP ROOT ──────────────────────────────────────────────────────────────
+
+type Screen = 'painel'|'gastos'|'receitas'|'contas'|'relatorio'
 
 export default function App() {
   const [user, setUser] = useState<User|null>(null)
@@ -698,8 +930,11 @@ export default function App() {
   if (!user) return <div style={{ height:'100vh', background:'#0A0B0F' }}><LoginScreen /></div>
 
   const navItems: { key: Screen; label: string }[] = [
-    { key:'painel', label:'Painel' },{ key:'gastos', label:'Gastos' },
-    { key:'contas', label:'Contas' },{ key:'relatorio', label:'Relatorio' },
+    { key:'painel', label:'Painel' },
+    { key:'gastos', label:'Gastos' },
+    { key:'receitas', label:'Receitas' },
+    { key:'contas', label:'Contas' },
+    { key:'relatorio', label:'Relatorio' },
   ]
 
   return (
@@ -707,6 +942,7 @@ export default function App() {
       <div style={S.app}>
         {screen==='painel' && <PainelScreen uid={user.uid} />}
         {screen==='gastos' && <GastosScreen uid={user.uid} />}
+        {screen==='receitas' && <ReceitasScreen uid={user.uid} />}
         {screen==='contas' && <ContasScreen uid={user.uid} />}
         {screen==='relatorio' && <RelatorioScreen uid={user.uid} />}
         <nav style={S.nav}>
