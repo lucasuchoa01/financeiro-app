@@ -108,26 +108,65 @@ const S = {
 }
 
 
+
+// ─── HOOK: load/save categories from Firestore ─────────────────────────────
+
+function useCategories(uid: string) {
+  const [categories, setCategories] = useState<string[]>([])
+
+  const load = useCallback(async () => {
+    try {
+      const snap = await getDocs(collection(db,'users',uid,'config'))
+      const cfg = snap.docs.find(d => d.data().id==='categories')
+      if (cfg) setCategories(cfg.data().list as string[])
+    } catch {}
+  }, [uid])
+
+  useEffect(() => { load() }, [load])
+
+  const saveCategories = async (list: string[]) => {
+    try {
+      const snap = await getDocs(collection(db,'users',uid,'config'))
+      const cfg = snap.docs.find(d => d.data().id==='categories')
+      if (cfg) await deleteDoc(doc(db,'users',uid,'config',cfg.id))
+      await addDoc(collection(db,'users',uid,'config'), { id:'categories', list, createdAt:Date.now() })
+      setCategories(list)
+    } catch {}
+  }
+
+  const addCategory = async (cat: string) => {
+    const normalized = cat.trim().replace(/\b\w/g, c => c.toUpperCase())
+    if (!normalized || categories.includes(normalized)) return
+    await saveCategories([...categories, normalized])
+  }
+
+  return { categories, saveCategories, addCategory, reload: load }
+}
+
 // ─── CATEGORY INPUT with autocomplete ─────────────────────────────────────
 
-function CategoryInput({ value, onChange, allTxs, placeholder }: {
+function CategoryInput({ value, onChange, allTxs, savedCategories, placeholder }: {
   value: string
   onChange: (v: string) => void
   allTxs: Transaction[]
+  savedCategories: string[]
   placeholder?: string
 }) {
   const [focused, setFocused] = useState(false)
 
-  // Get unique categories from existing transactions, sorted by frequency
+  // Merge saved categories + categories from transactions, sorted by frequency
   const suggestions = (() => {
     const freq: Record<string, number> = {}
+    // saved categories get base frequency of 1
+    savedCategories.forEach(c => { freq[c] = (freq[c] || 1) })
+    // transactions boost frequency
     allTxs.forEach(t => {
-      const c = t.category.trim().toLowerCase()
-      if (c && c !== 'receita' && c !== 'outros') freq[c] = (freq[c] || 0) + 1
+      const c = t.category.trim().replace(/\b\w/g, ch => ch.toUpperCase())
+      if (c && c !== 'Receita' && c !== 'Outros') freq[c] = (freq[c] || 0) + 1
     })
     return Object.entries(freq)
       .sort((a, b) => b[1] - a[1])
-      .map(([c]) => c.charAt(0).toUpperCase() + c.slice(1))
+      .map(([c]) => c)
   })()
 
   const filtered = value.trim()
@@ -353,10 +392,72 @@ function PainelScreen({ uid }: { uid: string }) {
   )
 }
 
+
+// ─── CATEGORIES MANAGER ────────────────────────────────────────────────────
+
+function CategoriesManager({ uid, savedCats, onSave }: {
+  uid: string
+  savedCats: string[]
+  onSave: (list: string[]) => Promise<void>
+}) {
+  const [list, setList] = useState<string[]>([...savedCats])
+  const [newCat, setNewCat] = useState('')
+  const [msg, setMsg] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => { setList([...savedCats]) }, [savedCats])
+
+  const add = () => {
+    const normalized = newCat.trim().replace(/\b\w/g, c => c.toUpperCase())
+    if (!normalized || list.includes(normalized)) return
+    setList(prev => [...prev, normalized])
+    setNewCat('')
+  }
+
+  const remove = (i: number) => setList(prev => prev.filter((_,idx) => idx!==i))
+
+  const save = async () => {
+    setSaving(true)
+    await onSave(list)
+    setMsg('Categorias salvas!')
+    setTimeout(() => setMsg(''), 2000)
+    setSaving(false)
+  }
+
+  return (
+    <div>
+      <div style={{ ...S.label, marginBottom:10 }}>Gerenciar categorias</div>
+      <div style={S.card}>
+        {list.length===0
+          ? <div style={{ ...S.muted, textAlign:'center', padding:'12px 0' }}>Nenhuma categoria ainda</div>
+          : list.map((cat,i) => (
+            <div key={i} style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 0', borderBottom:'0.5px solid rgba(255,255,255,0.05)' }}>
+              <div style={{ flex:1, fontSize:13 }}>{cat}</div>
+              <button onClick={() => remove(i)} style={{ background:'none', border:'none', color:'#E24B4A', cursor:'pointer', fontSize:18, padding:'0 4px', lineHeight:1 }}>x</button>
+            </div>
+          ))
+        }
+        <div style={{ borderTop: list.length>0 ? '0.5px solid rgba(255,255,255,0.08)' : 'none', paddingTop:12, marginTop:list.length>0?8:0, display:'flex', gap:8 }}>
+          <input
+            style={{ ...S.input, marginBottom:0, flex:1 }}
+            placeholder="Nova categoria..."
+            value={newCat}
+            onChange={e => setNewCat(e.target.value)}
+            onKeyDown={e => e.key==='Enter' && add()}
+          />
+          <button onClick={add} style={{ padding:'12px 16px', background:'#13141A', border:'0.5px solid rgba(255,255,255,0.15)', borderRadius:12, color:'#4E9EFF', fontSize:18, cursor:'pointer', lineHeight:1 }}>+</button>
+        </div>
+      </div>
+      {msg && <div style={{ textAlign:'center', color:'#00E5A0', fontSize:13, margin:'8px 0' }}>{msg}</div>}
+      <button style={{ ...S.btn, opacity:saving?0.6:1 }} onClick={save} disabled={saving}>{saving?'Salvando...':'Salvar categorias'}</button>
+    </div>
+  )
+}
+
 // ─── GASTOS ────────────────────────────────────────────────────────────────
 
 function GastosScreen({ uid }: { uid: string }) {
-  const [tab, setTab] = useState<'add'|'fixos'|'list'>('add')
+  const [tab, setTab] = useState<'add'|'fixos'|'list'|'cats'>('add')
   const [txs, setTxs] = useState<Transaction[]>([])
   const [fixedExpenses, setFixedExpenses] = useState<FixedExpense[]>([])
   const [loading, setLoading] = useState(true)
@@ -365,6 +466,7 @@ function GastosScreen({ uid }: { uid: string }) {
   const [desc, setDesc] = useState('')
   const [cat, setCat] = useState('')
   const customAccounts = useAccounts(uid)
+  const { categories: savedCats, addCategory } = useCategories(uid)
   const [conta, setConta] = useState('')
   const [data, setData] = useState(todayStr())
   const [msg, setMsg] = useState('')
@@ -396,6 +498,8 @@ function GastosScreen({ uid }: { uid: string }) {
       type:'expense', value:v, description:desc.trim(),
       category:(cat.trim()||'Outros').replace(/\b\w/g,c=>c.toUpperCase()), account:conta, date:data, createdAt:Date.now(),
     })
+    const normalizedCat = (cat.trim()||'Outros').replace(/\b\w/g,c=>c.toUpperCase())
+    await addCategory(normalizedCat)
     setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
     setTimeout(() => setMsg(''), 2000)
     setSaving(false)
@@ -460,8 +564,8 @@ function GastosScreen({ uid }: { uid: string }) {
   return (
     <div style={S.screen}>
       <div style={{ display:'flex', gap:6, marginBottom:16 }}>
-        {([['add','Novo'],['fixos','Fixos'],['list',`Historico (${expenseTxs.length})`]] as const).map(([k,label]) => (
-          <button key={k} onClick={() => setTab(k)} style={{ flex:1, padding:'10px 4px', borderRadius:10, border:'none', cursor:'pointer', fontSize:12, fontWeight:tab===k?600:400, background:tab===k?'#4E9EFF':'#13141A', color:tab===k?'#fff':'rgba(255,255,255,0.4)' }}>{label}</button>
+        {([['add','Novo'],['fixos','Fixos'],['list',`Historico (${expenseTxs.length})`],['cats','Categorias']] as [string,string][]).map(([k,label]) => (
+          <button key={k} onClick={() => setTab(k as typeof tab)} style={{ flex:1, padding:'10px 4px', borderRadius:10, border:'none', cursor:'pointer', fontSize:11, fontWeight:tab===k?600:400, background:tab===k?'#4E9EFF':'#13141A', color:tab===k?'#fff':'rgba(255,255,255,0.4)' }}>{label}</button>
         ))}
       </div>
 
@@ -472,7 +576,7 @@ function GastosScreen({ uid }: { uid: string }) {
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Descricao</div>
           <input style={S.input} placeholder="Ex: Mercado, Uber..." value={desc} onChange={e => setDesc(e.target.value)} />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
-          <CategoryInput value={cat} onChange={setCat} allTxs={txs} placeholder="Ex: Alimentacao, Saude..." />
+          <CategoryInput value={cat} onChange={setCat} allTxs={txs} savedCategories={savedCats} placeholder="Ex: Alimentacao, Saude..." />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
           <select style={S.select} value={conta} onChange={e => setConta(e.target.value)}>
             {customAccounts.map(a => <option key={a} value={a}>{a}</option>)}
@@ -524,7 +628,7 @@ function GastosScreen({ uid }: { uid: string }) {
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
             <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={newFixAmt} onChange={e => setNewFixAmt(e.target.value)} />
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
-            <CategoryInput value={newFixCat} onChange={setNewFixCat} allTxs={txs} placeholder="Ex: Moradia, Servicos..." />
+            <CategoryInput value={newFixCat} onChange={setNewFixCat} allTxs={txs} savedCategories={savedCats} placeholder="Ex: Moradia, Servicos..." />
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
             <select style={{ ...S.select, marginBottom:0 }} value={newFixAccount} onChange={e => setNewFixAccount(e.target.value)}>
               {customAccounts.map(a => <option key={a} value={a}>{a}</option>)}
@@ -539,6 +643,16 @@ function GastosScreen({ uid }: { uid: string }) {
         expenseTxs.length===0
           ? <div style={{ ...S.muted, textAlign:'center', padding:'40px 0' }}>Nenhum gasto</div>
           : <div style={S.card}>{expenseTxs.map(t => <TxRow key={t.id} tx={t} onDelete={() => deletar(t.id)} />)}</div>
+      )}
+
+      {tab==='cats' && (
+        <CategoriesManager uid={uid} savedCats={savedCats} onSave={async (list) => {
+          const snap = await getDocs(collection(db,'users',uid,'config'))
+          const cfg = snap.docs.find(d => d.data().id==='categories')
+          if (cfg) await deleteDoc(doc(db,'users',uid,'config',cfg.id))
+          await addDoc(collection(db,'users',uid,'config'), { id:'categories', list, createdAt:Date.now() })
+          window.location.reload()
+        }} />
       )}
     </div>
   )
@@ -555,6 +669,7 @@ function ReceitasScreen({ uid }: { uid: string }) {
   const [desc, setDesc] = useState('')
   const [cat, setCat] = useState('')
   const customAccounts = useAccounts(uid)
+  const { categories: savedCats, addCategory } = useCategories(uid)
   const [conta, setConta] = useState('')
   const [data, setData] = useState(todayStr())
   const [msg, setMsg] = useState('')
@@ -579,6 +694,8 @@ function ReceitasScreen({ uid }: { uid: string }) {
       type:'income', value:v, description:desc.trim(),
       category:(cat.trim()||'Receita').replace(/\b\w/g,c=>c.toUpperCase()), account:conta, date:data, createdAt:Date.now(),
     })
+    const normalizedCat = (cat.trim()||'Receita').replace(/\b\w/g,c=>c.toUpperCase())
+    await addCategory(normalizedCat)
     setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
     setTimeout(() => setMsg(''), 2000)
     setSaving(false)
@@ -625,7 +742,7 @@ function ReceitasScreen({ uid }: { uid: string }) {
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Descricao</div>
           <input style={S.input} placeholder="Ex: Salario, Freelance..." value={desc} onChange={e => setDesc(e.target.value)} />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
-          <CategoryInput value={cat} onChange={setCat} allTxs={txs} placeholder="Ex: Salario, Dividendos..." />
+          <CategoryInput value={cat} onChange={setCat} allTxs={txs} savedCategories={savedCats} placeholder="Ex: Salario, Dividendos..." />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
           <select style={S.select} value={conta} onChange={e => setConta(e.target.value)}>
             {customAccounts.map(a => <option key={a} value={a}>{a}</option>)}
