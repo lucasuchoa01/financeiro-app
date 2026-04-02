@@ -4,8 +4,8 @@ import {
   createUserWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
-  User,
 } from 'firebase/auth'
+import type { User } from 'firebase/auth'
 import {
   collection,
   addDoc,
@@ -14,7 +14,6 @@ import {
   doc,
   query,
   orderBy,
-  where,
 } from 'firebase/firestore'
 import {
   AreaChart,
@@ -28,9 +27,10 @@ import {
   Cell,
 } from 'recharts'
 import { auth, db } from './firebase'
-import { Transaction, AccountEntry, ACCOUNTS, CATEGORIES, MONTHLY_INCOME, Category } from './types'
+import type { Transaction, AccountEntry } from './types'
+import { ACCOUNTS, CATEGORIES, MONTHLY_INCOME } from './types'
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+type Category = keyof typeof CATEGORIES
 
 const fmt = (v: number) =>
   v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -57,33 +57,28 @@ const prevMonthKey = (key: string) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
-// ─── Styles (inline tokens) ───────────────────────────────────────────────────
-
 const S = {
   app: {
     display: 'flex', flexDirection: 'column' as const,
     height: '100%', width: '100%', maxWidth: 430,
     margin: '0 auto', background: '#0A0B0F', position: 'relative' as const,
   },
-  screen: {
-    flex: 1, overflowY: 'auto' as const,
-    padding: '20px 16px 90px',
-  },
+  screen: { flex: 1, overflowY: 'auto' as const, padding: '20px 16px 90px' },
   card: {
-    background: '#13141A',
-    border: '0.5px solid rgba(255,255,255,0.07)',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 10,
+    background: '#13141A', border: '0.5px solid rgba(255,255,255,0.07)',
+    borderRadius: 16, padding: 16, marginBottom: 10,
   },
-  label: { fontSize: 11, color: '#4E9EFF', letterSpacing: '0.12em', textTransform: 'uppercase' as const, marginBottom: 4, fontFamily: "'DM Mono', monospace" },
+  label: {
+    fontSize: 11, color: '#4E9EFF', letterSpacing: '0.12em',
+    textTransform: 'uppercase' as const, marginBottom: 4,
+    fontFamily: "'DM Mono', monospace",
+  },
   bigVal: { fontSize: 30, fontWeight: 600, letterSpacing: '-0.02em' },
   muted: { color: 'rgba(255,255,255,0.4)', fontSize: 12 },
   input: {
     width: '100%', padding: '12px 14px',
     background: '#1C1D25', border: '0.5px solid rgba(255,255,255,0.12)',
-    borderRadius: 12, color: '#fff', fontSize: 15,
-    outline: 'none', marginBottom: 12,
+    borderRadius: 12, color: '#fff', fontSize: 15, outline: 'none', marginBottom: 12,
   },
   select: {
     width: '100%', padding: '12px 14px',
@@ -92,34 +87,27 @@ const S = {
     outline: 'none', marginBottom: 12, appearance: 'none' as const,
   },
   btn: {
-    width: '100%', padding: '14px',
-    background: '#4E9EFF', border: 'none',
-    borderRadius: 12, color: '#fff',
+    width: '100%', padding: '14px', background: '#4E9EFF',
+    border: 'none', borderRadius: 12, color: '#fff',
     fontSize: 15, fontWeight: 600, cursor: 'pointer',
   },
   btnGhost: {
-    width: '100%', padding: '12px',
-    background: 'transparent', border: '0.5px solid rgba(255,255,255,0.15)',
-    borderRadius: 12, color: 'rgba(255,255,255,0.6)',
-    fontSize: 14, cursor: 'pointer', marginTop: 8,
+    width: '100%', padding: '12px', background: 'transparent',
+    border: '0.5px solid rgba(255,255,255,0.15)', borderRadius: 12,
+    color: 'rgba(255,255,255,0.6)', fontSize: 14, cursor: 'pointer', marginTop: 8,
   },
   nav: {
     position: 'absolute' as const, bottom: 0, left: 0, right: 0,
     background: '#0D0E14', borderTop: '0.5px solid rgba(255,255,255,0.07)',
-    display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
-    paddingBottom: 'env(safe-area-inset-bottom)',
-    zIndex: 100,
+    display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', zIndex: 100,
   },
   navBtn: {
     padding: '10px 0 8px', border: 'none', background: 'transparent',
     color: 'rgba(255,255,255,0.3)', fontSize: 10,
     fontFamily: "'DM Sans', sans-serif", cursor: 'pointer',
-    display: 'flex', flexDirection: 'column' as const,
-    alignItems: 'center', gap: 4,
+    display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 4,
   },
 }
-
-// ─── LOGIN ────────────────────────────────────────────────────────────────────
 
 function LoginScreen() {
   const [email, setEmail] = useState('')
@@ -133,16 +121,17 @@ function LoginScreen() {
     try {
       if (isReg) await createUserWithEmailAndPassword(auth, email, pass)
       else await signInWithEmailAndPassword(auth, email, pass)
-    } catch (e: any) {
+    } catch (e: unknown) {
+      const code = (e as { code?: string }).code ?? ''
       const msgs: Record<string, string> = {
         'auth/invalid-email': 'E-mail inválido',
         'auth/wrong-password': 'Senha incorreta',
         'auth/user-not-found': 'Usuário não encontrado',
         'auth/email-already-in-use': 'E-mail já cadastrado',
-        'auth/weak-password': 'Senha muito fraca (mín. 6 caracteres)',
+        'auth/weak-password': 'Senha fraca (mín. 6 caracteres)',
         'auth/invalid-credential': 'E-mail ou senha incorretos',
       }
-      setErr(msgs[e.code] || 'Erro ao entrar. Tente novamente.')
+      setErr(msgs[code] || 'Erro ao entrar. Tente novamente.')
     }
     setLoading(false)
   }
@@ -160,13 +149,9 @@ function LoginScreen() {
           {isReg ? 'Preencha os dados para começar' : 'Entre com seu e-mail e senha'}
         </div>
       </div>
-
       <input style={S.input} placeholder="E-mail" type="email" value={email} onChange={e => setEmail(e.target.value)} />
-      <input style={S.input} placeholder="Senha" type="password" value={pass} onChange={e => setPass(e.target.value)}
-        onKeyDown={e => e.key === 'Enter' && handle()} />
-
+      <input style={S.input} placeholder="Senha" type="password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key === 'Enter' && handle()} />
       {err && <div style={{ color: '#E24B4A', fontSize: 13, marginBottom: 12, textAlign: 'center' }}>{err}</div>}
-
       <button style={{ ...S.btn, opacity: loading ? 0.6 : 1 }} onClick={handle} disabled={loading}>
         {loading ? 'Aguarde...' : isReg ? 'Criar conta' : 'Entrar'}
       </button>
@@ -176,8 +161,6 @@ function LoginScreen() {
     </div>
   )
 }
-
-// ─── PAINEL ───────────────────────────────────────────────────────────────────
 
 function PainelScreen({ uid }: { uid: string }) {
   const [txs, setTxs] = useState<Transaction[]>([])
@@ -198,43 +181,42 @@ function PainelScreen({ uid }: { uid: string }) {
 
   useEffect(() => { load() }, [load])
 
-  const thisMonthTxs = txs.filter(t => t.date.endsWith(new Date().getFullYear().toString()) &&
-    t.date.includes(`/${String(new Date().getMonth() + 1).padStart(2, '0')}/`))
+  const now = new Date()
+  const thisMonthTxs = txs.filter(t => {
+    const parts = t.date.split('/')
+    return parseInt(parts[1]) === now.getMonth() + 1 && parseInt(parts[2]) === now.getFullYear()
+  })
 
   const totalGasto = thisMonthTxs.filter(t => t.type === 'expense').reduce((s, t) => s + t.value, 0)
   const totalReceita = thisMonthTxs.filter(t => t.type === 'income').reduce((s, t) => s + t.value, 0)
   const renda = MONTHLY_INCOME + totalReceita
   const saldo = renda - totalGasto
 
-  // Patrimônio: soma dos saldos do mês atual
   const currentEntries = entries.filter(e => e.month === mk)
   const prevEntries = entries.filter(e => e.month === pmk)
   const patrimonioAtual = currentEntries.reduce((s, e) => s + e.balance, 0)
   const patrimonioPrev = prevEntries.reduce((s, e) => s + e.balance, 0)
+  const rendimentoRS = patrimonioAtual - patrimonioPrev
   const varPatrimonio = patrimonioPrev > 0 ? ((patrimonioAtual - patrimonioPrev) / patrimonioPrev) * 100 : 0
-  const rendimentoR$ = patrimonioAtual - patrimonioPrev
   const meta10pct = patrimonioPrev * (10 / 12 / 100)
 
-  // Gastos por categoria
-  const catTotals = Object.keys(CATEGORIES).map(cat => ({
+  const catTotals = (Object.keys(CATEGORIES) as Category[]).map(cat => ({
     cat,
     total: thisMonthTxs.filter(t => t.type === 'expense' && t.category === cat).reduce((s, t) => s + t.value, 0),
-    color: CATEGORIES[cat as Category].color,
-    budget: CATEGORIES[cat as Category].budget,
+    color: CATEGORIES[cat].color,
+    budget: CATEGORIES[cat].budget,
   })).filter(c => c.total > 0)
 
-  // Histórico de patrimônio (últimos 6 meses com entradas)
   const allMonths = [...new Set(entries.map(e => e.month))].sort().slice(-6)
   const chartData = allMonths.map(m => ({
     name: monthLabel(m),
-    patrimônio: entries.filter(e => e.month === m).reduce((s, e) => s + e.balance, 0),
+    patrimonio: entries.filter(e => e.month === m).reduce((s, e) => s + e.balance, 0),
   }))
 
   if (loading) return <LoadingScreen />
 
   return (
     <div style={S.screen}>
-      {/* Header */}
       <div style={{ marginBottom: 16 }}>
         <div style={S.label}>Saldo disponível este mês</div>
         <div style={{ ...S.bigVal, color: saldo >= 0 ? '#00E5A0' : '#E24B4A' }}>{fmt(saldo)}</div>
@@ -244,18 +226,17 @@ function PainelScreen({ uid }: { uid: string }) {
         </div>
       </div>
 
-      {/* Patrimônio */}
       <div style={S.card}>
         <div style={S.label}>Patrimônio total</div>
         <div style={{ fontSize: 24, fontWeight: 600, marginBottom: 8 }}>
           {patrimonioAtual > 0 ? fmt(patrimonioAtual) : '—'}
         </div>
         {patrimonioPrev > 0 && (
-          <div style={{ display: 'flex', gap: 16 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
             <div style={{ flex: 1, background: '#1C1D25', borderRadius: 10, padding: 10 }}>
               <div style={S.muted}>Rendimento</div>
-              <div style={{ fontSize: 14, fontWeight: 500, color: rendimentoR$ >= 0 ? '#00E5A0' : '#E24B4A', marginTop: 2 }}>
-                {rendimentoR$ >= 0 ? '+' : ''}{fmt(rendimentoR$)}
+              <div style={{ fontSize: 14, fontWeight: 500, color: rendimentoRS >= 0 ? '#00E5A0' : '#E24B4A', marginTop: 2 }}>
+                {rendimentoRS >= 0 ? '+' : ''}{fmt(rendimentoRS)}
               </div>
             </div>
             <div style={{ flex: 1, background: '#1C1D25', borderRadius: 10, padding: 10 }}>
@@ -266,20 +247,15 @@ function PainelScreen({ uid }: { uid: string }) {
             </div>
             <div style={{ flex: 1, background: '#1C1D25', borderRadius: 10, padding: 10 }}>
               <div style={S.muted}>Meta 10% a.a.</div>
-              <div style={{ fontSize: 14, fontWeight: 500, color: '#FF9F43', marginTop: 2 }}>
-                {fmt(meta10pct)}
-              </div>
+              <div style={{ fontSize: 14, fontWeight: 500, color: '#FF9F43', marginTop: 2 }}>{fmt(meta10pct)}</div>
             </div>
           </div>
         )}
         {patrimonioAtual === 0 && (
-          <div style={{ ...S.muted, textAlign: 'center', padding: '8px 0' }}>
-            Atualize os saldos na aba Contas
-          </div>
+          <div style={{ ...S.muted, textAlign: 'center', padding: '8px 0' }}>Atualize os saldos na aba Contas</div>
         )}
       </div>
 
-      {/* Gráfico patrimônio */}
       {chartData.length > 1 && (
         <div style={S.card}>
           <div style={S.label}>Evolução do patrimônio</div>
@@ -294,18 +270,15 @@ function PainelScreen({ uid }: { uid: string }) {
                 </defs>
                 <XAxis dataKey="name" tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 10 }} axisLine={false} tickLine={false} />
                 <YAxis hide />
-                <Tooltip
-                  contentStyle={{ background: '#1C1D25', border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: 10, color: '#fff', fontSize: 12 }}
-                  formatter={(v: number) => [fmt(v), 'Patrimônio']}
-                />
-                <Area type="monotone" dataKey="patrimônio" stroke="#4E9EFF" strokeWidth={2} fill="url(#gradPat)" />
+                <Tooltip contentStyle={{ background: '#1C1D25', border: 'none', borderRadius: 10, color: '#fff', fontSize: 12 }}
+                  formatter={(value: number) => [fmt(value), 'Patrimônio']} />
+                <Area type="monotone" dataKey="patrimonio" stroke="#4E9EFF" strokeWidth={2} fill="url(#gradPat)" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
         </div>
       )}
 
-      {/* Gastos por categoria */}
       {catTotals.length > 0 && (
         <div style={S.card}>
           <div style={S.label}>Gastos do mês</div>
@@ -327,8 +300,6 @@ function PainelScreen({ uid }: { uid: string }) {
               ))}
             </div>
           </div>
-
-          {/* Barras de orçamento */}
           <div style={{ marginTop: 12, borderTop: '0.5px solid rgba(255,255,255,0.06)', paddingTop: 12 }}>
             {catTotals.map((c, i) => {
               const pct = c.budget > 0 ? Math.min((c.total / c.budget) * 100, 100) : 0
@@ -337,7 +308,7 @@ function PainelScreen({ uid }: { uid: string }) {
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7 }}>
                   <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', width: 80, flexShrink: 0 }}>{c.cat}</div>
                   <div style={{ flex: 1, height: 4, background: 'rgba(255,255,255,0.06)', borderRadius: 2, overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${pct}%`, background: over ? '#E24B4A' : c.color, borderRadius: 2, transition: 'width 0.5s' }} />
+                    <div style={{ height: '100%', width: `${pct}%`, background: over ? '#E24B4A' : c.color, borderRadius: 2 }} />
                   </div>
                   <div style={{ fontSize: 11, color: over ? '#E24B4A' : 'rgba(255,255,255,0.4)', width: 65, textAlign: 'right', flexShrink: 0 }}>
                     {fmt(c.total)}
@@ -349,7 +320,6 @@ function PainelScreen({ uid }: { uid: string }) {
         </div>
       )}
 
-      {/* Últimos lançamentos */}
       <div style={S.card}>
         <div style={{ ...S.label, marginBottom: 10 }}>Últimos lançamentos</div>
         {txs.slice(0, 5).length === 0
@@ -360,8 +330,6 @@ function PainelScreen({ uid }: { uid: string }) {
     </div>
   )
 }
-
-// ─── GASTOS ───────────────────────────────────────────────────────────────────
 
 function GastosScreen({ uid }: { uid: string }) {
   const [tab, setTab] = useState<'add' | 'list'>('add')
@@ -394,7 +362,7 @@ function GastosScreen({ uid }: { uid: string }) {
       category: tipo === 'income' ? 'Outros' : cat,
       account: conta, date: data, createdAt: Date.now(),
     })
-    setValor(''); setDesc(''); setMsg('✓ Salvo!')
+    setValor(''); setDesc(''); setMsg('Salvo!')
     setTimeout(() => setMsg(''), 2000)
     setSaving(false)
     load()
@@ -411,12 +379,13 @@ function GastosScreen({ uid }: { uid: string }) {
 
   return (
     <div style={S.screen}>
-      {/* Tabs */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 16 }}>
         {(['add', 'list'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} style={{
-            padding: '10px', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: tab === t ? 600 : 400,
-            background: tab === t ? '#4E9EFF' : '#13141A', color: tab === t ? '#fff' : 'rgba(255,255,255,0.4)',
+            padding: '10px', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 14,
+            fontWeight: tab === t ? 600 : 400,
+            background: tab === t ? '#4E9EFF' : '#13141A',
+            color: tab === t ? '#fff' : 'rgba(255,255,255,0.4)',
           }}>
             {t === 'add' ? 'Novo lançamento' : `Histórico (${txs.length})`}
           </button>
@@ -425,55 +394,47 @@ function GastosScreen({ uid }: { uid: string }) {
 
       {tab === 'add' ? (
         <>
-          {/* Tipo */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 12 }}>
             <button onClick={() => setTipo('expense')} style={{
-              padding: '12px', borderRadius: 12, border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 500,
+              padding: '12px', borderRadius: 12, cursor: 'pointer', fontSize: 14, fontWeight: 500,
               background: tipo === 'expense' ? 'rgba(226,75,74,0.15)' : '#13141A',
               color: tipo === 'expense' ? '#E24B4A' : 'rgba(255,255,255,0.4)',
               border: tipo === 'expense' ? '0.5px solid rgba(226,75,74,0.4)' : '0.5px solid transparent',
             }}>Gasto</button>
             <button onClick={() => setTipo('income')} style={{
-              padding: '12px', borderRadius: 12, border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 500,
+              padding: '12px', borderRadius: 12, cursor: 'pointer', fontSize: 14, fontWeight: 500,
               background: tipo === 'income' ? 'rgba(0,229,160,0.1)' : '#13141A',
               color: tipo === 'income' ? '#00E5A0' : 'rgba(255,255,255,0.4)',
               border: tipo === 'income' ? '0.5px solid rgba(0,229,160,0.3)' : '0.5px solid transparent',
             }}>Receita</button>
           </div>
-
           <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Valor (R$)</div>
           <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={valor} onChange={e => setValor(e.target.value)} />
-
           <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Descrição</div>
-          <input style={S.input} placeholder="Ex: Mercado, Uber, Farmácia..." value={desc} onChange={e => setDesc(e.target.value)} />
-
+          <input style={S.input} placeholder="Ex: Mercado, Uber..." value={desc} onChange={e => setDesc(e.target.value)} />
           {tipo === 'expense' && (
             <>
               <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Categoria</div>
               <select style={S.select} value={cat} onChange={e => setCat(e.target.value as Category)}>
-                {Object.keys(CATEGORIES).map(c => <option key={c} value={c}>{c}</option>)}
+                {(Object.keys(CATEGORIES) as Category[]).map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </>
           )}
-
           <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Conta</div>
           <select style={S.select} value={conta} onChange={e => setConta(e.target.value)}>
             {ACCOUNTS.map(a => <option key={a} value={a}>{a}</option>)}
           </select>
-
           <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Data</div>
           <input style={S.input} placeholder="dd/mm/aaaa" value={data} onChange={e => setData(e.target.value)} />
-
-          {msg && <div style={{ textAlign: 'center', fontSize: 13, color: msg.startsWith('✓') ? '#00E5A0' : '#E24B4A', marginBottom: 8 }}>{msg}</div>}
+          {msg && <div style={{ textAlign: 'center', fontSize: 13, color: msg === 'Salvo!' ? '#00E5A0' : '#E24B4A', marginBottom: 8 }}>{msg}</div>}
           <button style={{ ...S.btn, opacity: saving ? 0.6 : 1 }} onClick={salvar} disabled={saving}>
             {saving ? 'Salvando...' : 'Salvar lançamento'}
           </button>
         </>
       ) : (
         <>
-          {/* Filtro */}
           <div style={{ display: 'flex', gap: 6, overflowX: 'auto', marginBottom: 12, paddingBottom: 4, scrollbarWidth: 'none' }}>
-            {['Todos', ...Object.keys(CATEGORIES), 'Outros'].map(c => (
+            {['Todos', ...(Object.keys(CATEGORIES) as Category[])].map(c => (
               <button key={c} onClick={() => setFilterCat(c)} style={{
                 padding: '6px 14px', borderRadius: 20, border: 'none', cursor: 'pointer',
                 fontSize: 12, whiteSpace: 'nowrap',
@@ -482,20 +443,15 @@ function GastosScreen({ uid }: { uid: string }) {
               }}>{c}</button>
             ))}
           </div>
-
           {filtered.length === 0
             ? <div style={{ ...S.muted, textAlign: 'center', padding: '40px 0' }}>Nenhum lançamento</div>
-            : <div style={S.card}>
-                {filtered.map(t => <TxRow key={t.id} tx={t} onDelete={() => deletar(t.id)} />)}
-              </div>
+            : <div style={S.card}>{filtered.map(t => <TxRow key={t.id} tx={t} onDelete={() => deletar(t.id)} />)}</div>
           }
         </>
       )}
     </div>
   )
 }
-
-// ─── CONTAS ───────────────────────────────────────────────────────────────────
 
 function ContasScreen({ uid }: { uid: string }) {
   const [entries, setEntries] = useState<AccountEntry[]>([])
@@ -519,10 +475,8 @@ function ContasScreen({ uid }: { uid: string }) {
 
   const salvar = async () => {
     setSaving(true)
-    // Remove current month entries first
     const curr = entries.filter(e => e.month === mk)
     await Promise.all(curr.map(e => deleteDoc(doc(db, 'users', uid, 'accountEntries', e.id))))
-    // Save new
     await Promise.all(
       Object.entries(balances)
         .filter(([, v]) => v !== '' && !isNaN(parseFloat(v)))
@@ -530,7 +484,7 @@ function ContasScreen({ uid }: { uid: string }) {
           account, balance: parseFloat(v.replace(',', '.')), month: mk, createdAt: Date.now(),
         }))
     )
-    setMsg('✓ Saldos salvos!')
+    setMsg('Saldos salvos!')
     setTimeout(() => setMsg(''), 2500)
     setSaving(false)
     load()
@@ -544,7 +498,6 @@ function ContasScreen({ uid }: { uid: string }) {
   const totalPrev = prevEntries.reduce((s, e) => s + e.balance, 0)
   const diff = totalAtual - totalPrev
 
-  // History for chart
   const allMonths = [...new Set(entries.map(e => e.month))].sort().slice(-6)
   const chartData = allMonths.map(m => ({
     name: monthLabel(m),
@@ -555,8 +508,6 @@ function ContasScreen({ uid }: { uid: string }) {
     <div style={S.screen}>
       <div style={{ ...S.label, marginBottom: 4 }}>Mês de referência</div>
       <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 16 }}>{monthLabel(mk)}</div>
-
-      {/* Resumo */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
         <div style={{ ...S.card, marginBottom: 0 }}>
           <div style={S.muted}>Total atual</div>
@@ -569,8 +520,6 @@ function ContasScreen({ uid }: { uid: string }) {
           </div>
         </div>
       </div>
-
-      {/* Chart */}
       {chartData.length > 1 && (
         <div style={{ ...S.card, marginBottom: 12 }}>
           <div style={S.label}>Histórico</div>
@@ -586,44 +535,38 @@ function ContasScreen({ uid }: { uid: string }) {
                 <XAxis dataKey="name" tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 10 }} axisLine={false} tickLine={false} />
                 <YAxis hide />
                 <Tooltip contentStyle={{ background: '#1C1D25', border: 'none', borderRadius: 10, color: '#fff', fontSize: 12 }}
-                  formatter={(v: number) => [fmt(v), 'Patrimônio']} />
+                  formatter={(value: number) => [fmt(value), 'Patrimônio']} />
                 <Area type="monotone" dataKey="total" stroke="#00E5A0" strokeWidth={2} fill="url(#gradCont)" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
         </div>
       )}
-
-      {/* Campos por conta */}
       <div style={S.card}>
         <div style={S.label}>Saldos de {monthLabel(mk)}</div>
         <div style={{ marginTop: 12 }}>
           {ACCOUNTS.map(account => {
             const prev = prevMap[account]
             const curr = parseFloat(balances[account]?.replace(',', '.') || '0') || 0
-            const d = prev !== undefined ? curr - prev : null
+            const delta = prev !== undefined ? curr - prev : null
             return (
               <div key={account} style={{ marginBottom: 14 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                   <div style={{ fontSize: 13, fontWeight: 500 }}>{account}</div>
-                  {d !== null && (
-                    <div style={{ fontSize: 11, color: d >= 0 ? '#00E5A0' : '#E24B4A' }}>
-                      {d >= 0 ? '+' : ''}{fmt(d)}
+                  {delta !== null && (
+                    <div style={{ fontSize: 11, color: delta >= 0 ? '#00E5A0' : '#E24B4A' }}>
+                      {delta >= 0 ? '+' : ''}{fmt(delta)}
                     </div>
                   )}
                 </div>
-                <input
-                  style={{ ...S.input, marginBottom: 0 }}
-                  type="number" inputMode="decimal" placeholder="0,00"
+                <input style={{ ...S.input, marginBottom: 0 }} type="number" inputMode="decimal" placeholder="0,00"
                   value={balances[account] || ''}
-                  onChange={e => setBalances(prev => ({ ...prev, [account]: e.target.value }))}
-                />
+                  onChange={e => setBalances(prev => ({ ...prev, [account]: e.target.value }))} />
                 {prev !== undefined && <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)', marginTop: 3 }}>Mês anterior: {fmt(prev)}</div>}
               </div>
             )
           })}
         </div>
-
         {msg && <div style={{ textAlign: 'center', color: '#00E5A0', fontSize: 13, marginBottom: 10 }}>{msg}</div>}
         <button style={{ ...S.btn, opacity: saving ? 0.6 : 1 }} onClick={salvar} disabled={saving}>
           {saving ? 'Salvando...' : 'Salvar saldos do mês'}
@@ -632,8 +575,6 @@ function ContasScreen({ uid }: { uid: string }) {
     </div>
   )
 }
-
-// ─── RELATÓRIO ────────────────────────────────────────────────────────────────
 
 function RelatorioScreen({ uid }: { uid: string }) {
   const [txs, setTxs] = useState<Transaction[]>([])
@@ -654,66 +595,52 @@ function RelatorioScreen({ uid }: { uid: string }) {
 
   const now = new Date()
   const thisMonthTxs = txs.filter(t => {
-    const [d, m, y] = t.date.split('/')
-    return parseInt(m) === now.getMonth() + 1 && parseInt(y) === now.getFullYear()
+    const parts = t.date.split('/')
+    return parseInt(parts[1]) === now.getMonth() + 1 && parseInt(parts[2]) === now.getFullYear()
   })
 
   const totalGasto = thisMonthTxs.filter(t => t.type === 'expense').reduce((s, t) => s + t.value, 0)
   const totalReceita = thisMonthTxs.filter(t => t.type === 'income').reduce((s, t) => s + t.value, 0)
   const renda = MONTHLY_INCOME + totalReceita
-
   const patrimonioAtual = entries.filter(e => e.month === mk).reduce((s, e) => s + e.balance, 0)
   const patrimonioPrev = entries.filter(e => e.month === pmk).reduce((s, e) => s + e.balance, 0)
   const rendimento = patrimonioAtual - patrimonioPrev
   const varPct = patrimonioPrev > 0 ? ((rendimento / patrimonioPrev) * 100) : 0
   const meta10 = patrimonioPrev * (10 / 12 / 100)
 
-  const catTotals = Object.keys(CATEGORIES).map(cat => ({
+  const catTotals = (Object.keys(CATEGORIES) as Category[]).map(cat => ({
     cat, total: thisMonthTxs.filter(t => t.type === 'expense' && t.category === cat).reduce((s, t) => s + t.value, 0),
-    budget: CATEGORIES[cat as Category].budget,
+    budget: CATEGORIES[cat].budget,
   })).sort((a, b) => b.total - a.total)
 
   const top5 = [...thisMonthTxs].filter(t => t.type === 'expense').sort((a, b) => b.value - a.value).slice(0, 5)
 
-  const despesaPct = patrimonioAtual > 0 ? ((totalGasto / patrimonioAtual) * 100).toFixed(2) : '—'
-
-  const relatorio = `📊 RELATÓRIO FINANCEIRO — ${monthLabel(mk)}
+  const relatorio = `RELATORIO FINANCEIRO - ${monthLabel(mk)}
 Gerado em ${todayStr()}
 
-═══════════════════════════════
-💰 RENDA E GASTOS DO MÊS
-═══════════════════════════════
+RENDA E GASTOS DO MES
 Renda total: ${fmt(renda)}
 Total de gastos: ${fmt(totalGasto)}
-Saldo disponível: ${fmt(renda - totalGasto)}
+Saldo disponivel: ${fmt(renda - totalGasto)}
 % gastos sobre renda: ${renda > 0 ? ((totalGasto / renda) * 100).toFixed(1) : 0}%
 
-═══════════════════════════════
-🏦 PATRIMÔNIO
-═══════════════════════════════
-Patrimônio atual: ${fmt(patrimonioAtual)}
-Patrimônio anterior: ${fmt(patrimonioPrev)}
+PATRIMONIO
+Patrimonio atual: ${fmt(patrimonioAtual)}
+Patrimonio anterior: ${fmt(patrimonioPrev)}
 Rendimento: ${fmt(rendimento)} (${varPct.toFixed(2)}%)
 Meta 10% a.a. mensal: ${fmt(meta10)}
-${rendimento >= meta10 ? '✅ Acima da meta' : '⚠️ Abaixo da meta'}
-% despesas / patrimônio: ${despesaPct}%
+${rendimento >= meta10 ? 'Acima da meta' : 'Abaixo da meta'}
 
-${entries.filter(e => e.month === mk).map(e => `• ${e.account}: ${fmt(e.balance)}`).join('\n')}
+${entries.filter(e => e.month === mk).map(e => `- ${e.account}: ${fmt(e.balance)}`).join('\n')}
 
-═══════════════════════════════
-📂 GASTOS POR CATEGORIA
-═══════════════════════════════
-${catTotals.filter(c => c.total > 0).map(c => `${c.cat}: ${fmt(c.total)} / ${fmt(c.budget)} orçado (${c.budget > 0 ? ((c.total / c.budget) * 100).toFixed(0) : '—'}%)`).join('\n')}
+GASTOS POR CATEGORIA
+${catTotals.filter(c => c.total > 0).map(c => `${c.cat}: ${fmt(c.total)} / ${fmt(c.budget)} orcado`).join('\n')}
 
-═══════════════════════════════
-🔝 TOP 5 MAIORES GASTOS
-═══════════════════════════════
-${top5.map((t, i) => `${i + 1}. ${t.description} — ${fmt(t.value)} [${t.category}]`).join('\n')}
+TOP 5 MAIORES GASTOS
+${top5.map((t, i) => `${i + 1}. ${t.description} - ${fmt(t.value)} [${t.category}]`).join('\n')}
 
-═══════════════════════════════
-📝 TODOS OS LANÇAMENTOS DO MÊS
-═══════════════════════════════
-${thisMonthTxs.map(t => `${t.type === 'income' ? '+' : '-'} ${fmt(t.value)} | ${t.description} | ${t.category} | ${t.account} | ${t.date}`).join('\n')}
+TODOS OS LANCAMENTOS
+${thisMonthTxs.map(t => `${t.type === 'income' ? '+' : '-'} ${fmt(t.value)} | ${t.description} | ${t.category} | ${t.date}`).join('\n')}
 `
 
   const copiar = () => {
@@ -727,8 +654,6 @@ ${thisMonthTxs.map(t => `${t.type === 'income' ? '+' : '-'} ${fmt(t.value)} | ${
     <div style={S.screen}>
       <div style={S.label}>Relatório do mês</div>
       <div style={{ fontSize: 20, fontWeight: 600, marginBottom: 16 }}>{monthLabel(mk)}</div>
-
-      {/* Resumo visual */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
         <div style={{ ...S.card, marginBottom: 0 }}>
           <div style={S.muted}>Patrimônio</div>
@@ -738,25 +663,13 @@ ${thisMonthTxs.map(t => `${t.type === 'income' ? '+' : '-'} ${fmt(t.value)} | ${
           </div>
         </div>
         <div style={{ ...S.card, marginBottom: 0 }}>
-          <div style={S.muted}>Vs meta 10% a.a.</div>
+          <div style={S.muted}>Vs meta 10%</div>
           <div style={{ fontSize: 16, fontWeight: 600, marginTop: 4 }}>{fmt(meta10)}</div>
           <div style={{ fontSize: 11, color: rendimento >= meta10 ? '#00E5A0' : '#FF9F43', marginTop: 2 }}>
-            {rendimento >= meta10 ? '✅ No ritmo' : '⚠️ Abaixo'}
-          </div>
-        </div>
-        <div style={{ ...S.card, marginBottom: 0 }}>
-          <div style={S.muted}>Total gasto</div>
-          <div style={{ fontSize: 16, fontWeight: 600, color: '#E24B4A', marginTop: 4 }}>{fmt(totalGasto)}</div>
-        </div>
-        <div style={{ ...S.card, marginBottom: 0 }}>
-          <div style={S.muted}>% sobre renda</div>
-          <div style={{ fontSize: 16, fontWeight: 600, marginTop: 4 }}>
-            {renda > 0 ? `${((totalGasto / renda) * 100).toFixed(1)}%` : '—'}
+            {rendimento >= meta10 ? 'No ritmo' : 'Abaixo'}
           </div>
         </div>
       </div>
-
-      {/* Preview do relatório */}
       <div style={S.card}>
         <div style={{ ...S.label, marginBottom: 10 }}>Preview — texto para IA</div>
         <div style={{
@@ -764,11 +677,9 @@ ${thisMonthTxs.map(t => `${t.type === 'income' ? '+' : '-'} ${fmt(t.value)} | ${
           fontFamily: "'DM Mono', monospace", fontSize: 10.5,
           color: 'rgba(255,255,255,0.6)', lineHeight: 1.7,
           maxHeight: 220, overflowY: 'auto', whiteSpace: 'pre-wrap',
-        }}>
-          {relatorio}
-        </div>
+        }}>{relatorio}</div>
         <button style={{ ...S.btn, marginTop: 12, background: copied ? '#00E5A0' : '#4E9EFF' }} onClick={copiar}>
-          {copied ? '✓ Copiado!' : 'Copiar relatório'}
+          {copied ? 'Copiado!' : 'Copiar relatório'}
         </button>
         <div style={{ ...S.muted, textAlign: 'center', fontSize: 11, marginTop: 8 }}>
           Cole no ChatGPT ou Claude para análise
@@ -777,8 +688,6 @@ ${thisMonthTxs.map(t => `${t.type === 'income' ? '+' : '-'} ${fmt(t.value)} | ${
     </div>
   )
 }
-
-// ─── SHARED COMPONENTS ────────────────────────────────────────────────────────
 
 function TxRow({ tx, onDelete }: { tx: Transaction; onDelete?: () => void }) {
   const isInc = tx.type === 'income'
@@ -794,7 +703,7 @@ function TxRow({ tx, onDelete }: { tx: Transaction; onDelete?: () => void }) {
         {isInc ? '+' : '-'}{fmt(tx.value)}
       </div>
       {onDelete && (
-        <button onClick={onDelete} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.2)', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: 1 }}>×</button>
+        <button onClick={onDelete} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.2)', cursor: 'pointer', fontSize: 18, padding: '0 2px' }}>x</button>
       )}
     </div>
   )
@@ -809,8 +718,6 @@ function LoadingScreen() {
   )
 }
 
-// ─── NAV ICONS ────────────────────────────────────────────────────────────────
-
 const NavIcon = ({ type }: { type: string }) => {
   const icons: Record<string, string> = {
     painel: 'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z',
@@ -824,8 +731,6 @@ const NavIcon = ({ type }: { type: string }) => {
     </svg>
   )
 }
-
-// ─── APP ROOT ─────────────────────────────────────────────────────────────────
 
 type Screen = 'painel' | 'gastos' | 'contas' | 'relatorio'
 
@@ -843,19 +748,11 @@ export default function App() {
   }, [])
 
   if (authLoading) {
-    return (
-      <div style={{ height: '100vh', background: '#0A0B0F', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <LoadingScreen />
-      </div>
-    )
+    return <div style={{ height: '100vh', background: '#0A0B0F', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><LoadingScreen /></div>
   }
 
   if (!user) {
-    return (
-      <div style={{ height: '100vh', background: '#0A0B0F' }}>
-        <LoginScreen />
-      </div>
-    )
+    return <div style={{ height: '100vh', background: '#0A0B0F' }}><LoginScreen /></div>
   }
 
   const navItems: { key: Screen; label: string }[] = [
@@ -868,13 +765,10 @@ export default function App() {
   return (
     <div style={{ height: '100vh', background: '#0A0B0F', display: 'flex', justifyContent: 'center' }}>
       <div style={S.app}>
-        {/* Screen content */}
         {screen === 'painel' && <PainelScreen uid={user.uid} />}
         {screen === 'gastos' && <GastosScreen uid={user.uid} />}
         {screen === 'contas' && <ContasScreen uid={user.uid} />}
         {screen === 'relatorio' && <RelatorioScreen uid={user.uid} />}
-
-        {/* Bottom nav */}
         <nav style={S.nav}>
           {navItems.map(item => (
             <button key={item.key} onClick={() => setScreen(item.key)} style={{
@@ -886,12 +780,9 @@ export default function App() {
             </button>
           ))}
         </nav>
-
-        {/* Logout */}
         <button onClick={() => signOut(auth)} style={{
-          position: 'absolute', top: 16, right: 16,
-          background: 'none', border: 'none', color: 'rgba(255,255,255,0.2)',
-          fontSize: 11, cursor: 'pointer', fontFamily: "'DM Mono', monospace",
+          position: 'absolute', top: 16, right: 16, background: 'none', border: 'none',
+          color: 'rgba(255,255,255,0.2)', fontSize: 11, cursor: 'pointer', fontFamily: "'DM Mono', monospace",
         }}>sair</button>
       </div>
     </div>
