@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth'
 import type { User } from 'firebase/auth'
-import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, setDoc } from 'firebase/firestore'
+import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy } from 'firebase/firestore'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts'
 import { auth, db } from './firebase'
 // ─── TYPES & CONSTANTS (inline) ───────────────────────────────────────────
@@ -34,14 +34,6 @@ export interface FixedExpense {
   category: string
   account: string
   createdAt: number
-}
-
-export interface FixedPayment {
-  id: string
-  fixedExpenseId: string
-  month: string
-  paid: boolean
-  paidAt: number
 }
 
 const ACCOUNTS: string[] = []
@@ -303,7 +295,6 @@ function GastosScreen({ uid }: { uid: string }) {
   const [tab, setTab] = useState<'add'|'fixos'|'list'>('add')
   const [txs, setTxs] = useState<Transaction[]>([])
   const [fixedExpenses, setFixedExpenses] = useState<FixedExpense[]>([])
-  const [fixedPayments, setFixedPayments] = useState<FixedPayment[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [valor, setValor] = useState('')
@@ -322,14 +313,12 @@ function GastosScreen({ uid }: { uid: string }) {
   const mk = currentMonthKey()
 
   const load = useCallback(async () => {
-    const [txSnap, fxSnap, fpSnap] = await Promise.all([
+    const [txSnap, fxSnap] = await Promise.all([
       getDocs(query(collection(db,'users',uid,'transactions'), orderBy('createdAt','desc'))),
       getDocs(query(collection(db,'users',uid,'fixedExpenses'), orderBy('createdAt','asc'))),
-      getDocs(query(collection(db,'users',uid,'fixedPayments'), orderBy('createdAt','desc'))),
     ])
     setTxs(txSnap.docs.map(d => ({ id:d.id,...d.data() } as Transaction)))
     setFixedExpenses(fxSnap.docs.map(d => ({ id:d.id,...d.data() } as FixedExpense)))
-    setFixedPayments(fpSnap.docs.map(d => ({ id:d.id,...d.data() } as FixedPayment)))
     setLoading(false)
   }, [uid])
 
@@ -372,22 +361,24 @@ function GastosScreen({ uid }: { uid: string }) {
     load()
   }
 
+  const isPaid = (fx: FixedExpense) => {
+    const [y,m] = mk.split('-')
+    return txs.some(t =>
+      t.description===`[FIXO] ${fx.name}` &&
+      t.date.endsWith(`/${m}/${y}`) &&
+      t.type==='expense'
+    )
+  }
+
   const togglePaid = async (fx: FixedExpense) => {
-    const payId = `${fx.id}_${mk}`
-    const existing = fixedPayments.find(p => p.fixedExpenseId===fx.id && p.month===mk)
-    if (existing) {
-      // unpay
-      await deleteDoc(doc(db,'users',uid,'fixedPayments',existing.id))
-      // also remove transaction if exists
-      const relatedTx = txs.find(t => t.description===`[FIXO] ${fx.name}` && t.date.endsWith(mk.split('-').reverse().join('/')))
+    const [y,m] = mk.split('-')
+    const alreadyPaid = isPaid(fx)
+    if (alreadyPaid) {
+      // remove transaction
+      const relatedTx = txs.find(t => t.description===`[FIXO] ${fx.name}` && t.date.endsWith(`/${m}/${y}`) && t.type==='expense')
       if (relatedTx) await deleteDoc(doc(db,'users',uid,'transactions',relatedTx.id))
     } else {
-      // mark paid
-      await setDoc(doc(db,'users',uid,'fixedPayments',payId), {
-        fixedExpenseId:fx.id, month:mk, paid:true, paidAt:Date.now(),
-      })
       // create transaction
-      const [y,m] = mk.split('-')
       await addDoc(collection(db,'users',uid,'transactions'), {
         type:'expense', value:fx.amount, description:`[FIXO] ${fx.name}`,
         category:fx.category, account:fx.account||customAccounts[0]||'', date:`01/${m}/${y}`, createdAt:Date.now(),
@@ -436,7 +427,7 @@ function GastosScreen({ uid }: { uid: string }) {
             ? <div style={{ ...S.muted, textAlign:'center', padding:'16px 0' }}>Nenhum gasto fixo cadastrado ainda</div>
             : <div style={S.card}>
                 {fixedExpenses.map(fx => {
-                  const paid = fixedPayments.some(p => p.fixedExpenseId===fx.id && p.month===mk)
+                  const paid = isPaid(fx)
                   return (
                     <div key={fx.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 0', borderBottom:'0.5px solid rgba(255,255,255,0.05)' }}>
                       <button onClick={() => togglePaid(fx)} style={{
