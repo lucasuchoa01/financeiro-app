@@ -441,6 +441,44 @@ function CategoriesManager({ uid, savedCats, onSave }: {
   )
 }
 
+
+function FixedExpenseList({ fixedExpenses, isPaid, togglePaid, deleteFixed }: {
+  fixedExpenses: FixedExpense[]
+  isPaid: (fx: FixedExpense) => boolean
+  togglePaid: (fx: FixedExpense) => void
+  deleteFixed: (id: string) => void
+}) {
+  const sorted = [...fixedExpenses].sort((a,b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name))
+  const groups: Record<string, FixedExpense[]> = {}
+  sorted.forEach(fx => { if (!groups[fx.category]) groups[fx.category] = []; groups[fx.category].push(fx) })
+
+  return (
+    <>
+      {Object.entries(groups).map(([cat, items]) => (
+        <div key={cat}>
+          <div style={{ fontSize:10, color:'#4E9EFF', letterSpacing:'0.1em', textTransform:'uppercase', fontFamily:"'DM Mono',monospace", padding:'10px 0 4px' }}>{cat}</div>
+          {items.map(fx => {
+            const paid = isPaid(fx)
+            return (
+              <div key={fx.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 0', borderBottom:'0.5px solid rgba(255,255,255,0.05)' }}>
+                <button onClick={() => togglePaid(fx)} style={{ width:24, height:24, borderRadius:6, border:'none', cursor:'pointer', flexShrink:0, background:paid?'#00E5A0':'rgba(255,255,255,0.1)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                  {paid && <span style={{ color:'#0A0B0F', fontSize:14, fontWeight:700 }}>&#10003;</span>}
+                </button>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:13, fontWeight:500, color:paid?'rgba(255,255,255,0.4)':'#fff', textDecoration:paid?'line-through':'none' }}>{fx.name}</div>
+                  <div style={{ fontSize:10, color:'rgba(255,255,255,0.3)' }}>{fx.account || ''}</div>
+                </div>
+                <div style={{ fontSize:13, fontWeight:500, color:paid?'rgba(255,255,255,0.35)':'#E24B4A' }}>{fmt(fx.amount)}</div>
+                <button onClick={() => deleteFixed(fx.id)} style={{ background:'none', border:'none', color:'rgba(255,255,255,0.2)', cursor:'pointer', fontSize:16, padding:'0 2px' }}>x</button>
+              </div>
+            )
+          })}
+        </div>
+      ))}
+    </>
+  )
+}
+
 // ─── GASTOS ────────────────────────────────────────────────────────────────
 
 function GastosScreen({ uid }: { uid: string }) {
@@ -581,28 +619,8 @@ function GastosScreen({ uid }: { uid: string }) {
           {fixedExpenses.length===0
             ? <div style={{ ...S.muted, textAlign:'center', padding:'16px 0' }}>Nenhum gasto fixo cadastrado ainda</div>
             : <div style={S.card}>
-                {[...fixedExpenses].sort((a,b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name)).map(fx => {
-                  const paid = isPaid(fx)
-                  return (
-                    <div key={fx.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 0', borderBottom:'0.5px solid rgba(255,255,255,0.05)' }}>
-                      <button onClick={() => togglePaid(fx)} style={{
-                        width:24, height:24, borderRadius:6, border:'none', cursor:'pointer', flexShrink:0,
-                        background:paid?'#00E5A0':'rgba(255,255,255,0.1)',
-                        display:'flex', alignItems:'center', justifyContent:'center',
-                      }}>
-                        {paid && <span style={{ color:'#0A0B0F', fontSize:14, fontWeight:700 }}>&#10003;</span>}
-                      </button>
-                      <div style={{ flex:1 }}>
-                        <div style={{ fontSize:13, fontWeight:500, color:paid?'rgba(255,255,255,0.4)':'#fff', textDecoration:paid?'line-through':'none' }}>{fx.name}</div>
-                        <div style={{ fontSize:10, color:'rgba(255,255,255,0.3)' }}>{fx.category}{fx.account ? ` | ${fx.account}` : ''}</div>
-                      </div>
-                      <div style={{ fontSize:13, fontWeight:500, color:paid?'rgba(255,255,255,0.35)':'#E24B4A' }}>{fmt(fx.amount)}</div>
-                      <button onClick={() => deleteFixed(fx.id)} style={{ background:'none', border:'none', color:'rgba(255,255,255,0.2)', cursor:'pointer', fontSize:16, padding:'0 2px' }}>x</button>
-                    </div>
-                    </div>
-                  )
-                })})()}
-                <div style={{ paddingTop:10, display:'flex', justifyContent:'space-between' }}>
+                <FixedExpenseList fixedExpenses={fixedExpenses} isPaid={isPaid} togglePaid={togglePaid} deleteFixed={deleteFixed} />
+                <div style={{ paddingTop:10, borderTop:'0.5px solid rgba(255,255,255,0.08)', display:'flex', justifyContent:'space-between' }}>
                   <div style={S.muted}>Total</div>
                   <div style={{ fontSize:13, fontWeight:500 }}>{fmt(fixedExpenses.reduce((s,f) => s+f.amount,0))}</div>
                 </div>
