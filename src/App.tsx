@@ -164,6 +164,7 @@ function PainelScreen({ uid }: { uid: string }) {
   const [txs, setTxs] = useState<Transaction[]>([])
   const [entries, setEntries] = useState<AccountEntry[]>([])
   const [loading, setLoading] = useState(true)
+  const validAccounts = useAccounts(uid)
   const mk = currentMonthKey()
   const pmk = prevMonthKey(mk)
 
@@ -198,8 +199,9 @@ function PainelScreen({ uid }: { uid: string }) {
   const renda = MONTHLY_INCOME + totalReceita
   const saldo = renda - totalGasto
 
-  const patrimonioAtual = entries.filter(e => e.month===mk).reduce((s,e) => s+e.balance, 0)
-  const patrimonioPrev = entries.filter(e => e.month===pmk).reduce((s,e) => s+e.balance, 0)
+  const validEntries = entries.filter(e => validAccounts.length===0 || validAccounts.includes(e.account))
+  const patrimonioAtual = validEntries.filter(e => e.month===mk).reduce((s,e) => s+e.balance, 0)
+  const patrimonioPrev = validEntries.filter(e => e.month===pmk).reduce((s,e) => s+e.balance, 0)
   const rendimentoRS = patrimonioAtual - patrimonioPrev
   const varPatrimonio = patrimonioPrev>0 ? ((patrimonioAtual-patrimonioPrev)/patrimonioPrev)*100 : 0
   const meta10pct = patrimonioPrev*(10/12/100)
@@ -209,10 +211,10 @@ function PainelScreen({ uid }: { uid: string }) {
   thisMonthTxs.filter(t => t.type==='expense').forEach(t => { catMap[t.category]=(catMap[t.category]||0)+t.value })
   const catData = Object.entries(catMap).sort((a,b) => b[1]-a[1]).slice(0,5).map(([cat,total]) => ({ cat, total }))
 
-  const allMonths = [...new Set(entries.map(e => e.month))].sort().slice(-6)
+  const allMonths = [...new Set(validEntries.map(e => e.month))].sort().slice(-6)
   const chartData = allMonths.map(m => ({
     name: monthLabel(m),
-    patrimonio: entries.filter(e => e.month===m).reduce((s,e) => s+e.balance, 0),
+    patrimonio: validEntries.filter(e => e.month===m).reduce((s,e) => s+e.balance, 0),
   }))
 
   if (loading) return <LoadingScreen />
@@ -701,13 +703,15 @@ function ContasScreen({ uid }: { uid: string }) {
   prevEntries.forEach(e => { prevMap[e.account]=e.balance })
 
   const totalAtual = accounts.reduce((s,a) => s+(parseFloat(balances[a]?.replace(',','.')||'0')||0), 0)
-  const totalPrev = prevEntries.reduce((s,e) => s+e.balance, 0)
+  const totalPrev = prevEntries.filter(e => accounts.includes(e.account)).reduce((s,e) => s+e.balance, 0)
   const diff = totalAtual - totalPrev
 
-  const allMonthsWithData = [...new Set(entries.map(e => e.month))].sort().slice(-6)
+  // Only count entries for accounts in the current list (ignore old/renamed accounts)
+  const validEntries = entries.filter(e => accounts.includes(e.account))
+  const allMonthsWithData = [...new Set(validEntries.map(e => e.month))].sort().slice(-6)
   const chartData = allMonthsWithData.map(m => ({
     name: monthLabel(m),
-    total: entries.filter(e => e.month===m).reduce((s,e) => s+e.balance, 0),
+    total: validEntries.filter(e => e.month===m).reduce((s,e) => s+e.balance, 0),
   }))
 
   return (
