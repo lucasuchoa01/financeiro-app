@@ -87,6 +87,22 @@ const generateMonths = () => {
   return months.reverse()
 }
 
+// ─── HOOK: load custom accounts from Firestore ─────────────────────────────
+
+function useAccounts(uid: string) {
+  const [accounts, setAccounts] = useState<string[]>(ACCOUNTS)
+
+  useEffect(() => {
+    getDocs(collection(db,'users',uid,'config')).then(snap => {
+      const cfg = snap.docs.find(d => d.data().id==='accounts')
+      if (cfg) setAccounts(cfg.data().list as string[])
+    }).catch(() => {})
+  }, [uid])
+
+  return accounts
+}
+
+
 const S = {
   app: { display:'flex', flexDirection:'column' as const, height:'100%', width:'100%', maxWidth:430, margin:'0 auto', background:'#0A0B0F', position:'relative' as const },
   screen: { flex:1, overflowY:'auto' as const, padding:'20px 16px 90px' },
@@ -157,7 +173,15 @@ function PainelScreen({ uid }: { uid: string }) {
       getDocs(query(collection(db,'users',uid,'accountEntries'), orderBy('createdAt','desc'))),
     ])
     setTxs(txSnap.docs.map(d => ({ id:d.id,...d.data() } as Transaction)))
-    setEntries(entSnap.docs.map(d => ({ id:d.id,...d.data() } as AccountEntry)))
+    // Deduplicate entries: keep latest per month+account
+    const rawEnt = entSnap.docs.map(d => ({ id:d.id,...d.data() } as AccountEntry))
+    const seen = new Set<string>()
+    setEntries(rawEnt.filter(e => {
+      const key = `${e.month}_${e.account}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    }))
     setLoading(false)
   }, [uid])
 
@@ -285,7 +309,8 @@ function GastosScreen({ uid }: { uid: string }) {
   const [valor, setValor] = useState('')
   const [desc, setDesc] = useState('')
   const [cat, setCat] = useState('')
-  const [conta, setConta] = useState(ACCOUNTS[0])
+  const customAccounts = useAccounts(uid)
+  const [conta, setConta] = useState('')
   const [data, setData] = useState(todayStr())
   const [msg, setMsg] = useState('')
   // new fixed expense form
@@ -369,6 +394,8 @@ function GastosScreen({ uid }: { uid: string }) {
     load()
   }
 
+  useEffect(() => { if (customAccounts.length > 0 && !conta) setConta(customAccounts[0]) }, [customAccounts, conta])
+
   const expenseTxs = txs.filter(t => t.type==='expense')
 
   if (loading) return <LoadingScreen />
@@ -391,7 +418,7 @@ function GastosScreen({ uid }: { uid: string }) {
           <input style={S.input} placeholder="Ex: Alimentacao, Saude..." value={cat} onChange={e => setCat(e.target.value)} />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
           <select style={S.select} value={conta} onChange={e => setConta(e.target.value)}>
-            {ACCOUNTS.map(a => <option key={a} value={a}>{a}</option>)}
+            {customAccounts.map(a => <option key={a} value={a}>{a}</option>)}
           </select>
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Data</div>
           <input style={S.input} placeholder="dd/mm/aaaa" value={data} onChange={e => setData(e.target.value)} />
@@ -466,7 +493,8 @@ function ReceitasScreen({ uid }: { uid: string }) {
   const [valor, setValor] = useState('')
   const [desc, setDesc] = useState('')
   const [cat, setCat] = useState('')
-  const [conta, setConta] = useState(ACCOUNTS[0])
+  const customAccounts = useAccounts(uid)
+  const [conta, setConta] = useState('')
   const [data, setData] = useState(todayStr())
   const [msg, setMsg] = useState('')
   const [filterMonth, setFilterMonth] = useState(currentMonthKey())
@@ -480,6 +508,7 @@ function ReceitasScreen({ uid }: { uid: string }) {
   }, [uid])
 
   useEffect(() => { load() }, [load])
+  useEffect(() => { if (customAccounts.length > 0 && !conta) setConta(customAccounts[0]) }, [customAccounts, conta])
 
   const salvar = async () => {
     const v = parseFloat(valor.replace(',','.'))
@@ -538,7 +567,7 @@ function ReceitasScreen({ uid }: { uid: string }) {
           <input style={S.input} placeholder="Ex: Salario, Dividendos..." value={cat} onChange={e => setCat(e.target.value)} />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
           <select style={S.select} value={conta} onChange={e => setConta(e.target.value)}>
-            {ACCOUNTS.map(a => <option key={a} value={a}>{a}</option>)}
+            {customAccounts.map(a => <option key={a} value={a}>{a}</option>)}
           </select>
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Data</div>
           <input style={S.input} placeholder="dd/mm/aaaa" value={data} onChange={e => setData(e.target.value)} />
@@ -615,7 +644,15 @@ function ContasScreen({ uid }: { uid: string }) {
 
   const load = useCallback(async () => {
     const snap = await getDocs(query(collection(db,'users',uid,'accountEntries'), orderBy('createdAt','desc')))
-    const data = snap.docs.map(d => ({ id:d.id,...d.data() } as AccountEntry))
+    const raw = snap.docs.map(d => ({ id:d.id,...d.data() } as AccountEntry))
+    // Deduplicate: keep only the latest entry per month+account
+    const seen = new Set<string>()
+    const data = raw.filter(e => {
+      const key = `${e.month}_${e.account}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
     setEntries(data)
     const current = data.filter(e => e.month===selectedMonth)
     const init: Record<string,string> = {}
@@ -681,6 +718,7 @@ function ContasScreen({ uid }: { uid: string }) {
           <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} style={{ background:'transparent', border:'none', color:'#fff', fontSize:20, fontWeight:600, cursor:'pointer', outline:'none', padding:'2px 0', fontFamily:"'DM Sans',sans-serif" }}>
             {allMonths.map(m => <option key={m} value={m} style={{ background:'#13141A' }}>{monthLabel(m)}</option>)}
           </select>
+          <div style={{ fontSize:10, color:'rgba(255,255,255,0.25)', marginTop:2, fontFamily:"'DM Mono',monospace" }}>atualizar todo dia 5 do mes</div>
         </div>
         <button onClick={() => { setEditMode(!editMode); setEditNames([...accounts]) }} style={{ background:editMode?'#4E9EFF22':'#13141A', border:editMode?'0.5px solid #4E9EFF':'0.5px solid rgba(255,255,255,0.15)', color:editMode?'#4E9EFF':'rgba(255,255,255,0.5)', borderRadius:10, padding:'6px 14px', fontSize:12, cursor:'pointer' }}>
           {editMode?'Cancelar':'Editar contas'}
