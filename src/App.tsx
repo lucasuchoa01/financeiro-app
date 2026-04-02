@@ -145,29 +145,16 @@ function useCategories(uid: string) {
 
 // ─── CATEGORY INPUT with autocomplete ─────────────────────────────────────
 
-function CategoryInput({ value, onChange, allTxs, savedCategories, placeholder }: {
+function CategoryInput({ value, onChange, savedCategories, placeholder }: {
   value: string
   onChange: (v: string) => void
-  allTxs: Transaction[]
   savedCategories: string[]
   placeholder?: string
 }) {
   const [focused, setFocused] = useState(false)
 
-  // Merge saved categories + categories from transactions, sorted by frequency
-  const suggestions = (() => {
-    const freq: Record<string, number> = {}
-    // saved categories get base frequency of 1
-    savedCategories.forEach(c => { freq[c] = (freq[c] || 1) })
-    // transactions boost frequency
-    allTxs.forEach(t => {
-      const c = t.category.trim().replace(/\b\w/g, ch => ch.toUpperCase())
-      if (c && c !== 'Receita' && c !== 'Outros') freq[c] = (freq[c] || 0) + 1
-    })
-    return Object.entries(freq)
-      .sort((a, b) => b[1] - a[1])
-      .map(([c]) => c)
-  })()
+  // Only use saved categories from Firestore
+  const suggestions = savedCategories
 
   const filtered = value.trim()
     ? suggestions.filter(s => s.toLowerCase().startsWith(value.toLowerCase()) && s.toLowerCase() !== value.toLowerCase())
@@ -576,7 +563,7 @@ function GastosScreen({ uid }: { uid: string }) {
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Descricao</div>
           <input style={S.input} placeholder="Ex: Mercado, Uber..." value={desc} onChange={e => setDesc(e.target.value)} />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
-          <CategoryInput value={cat} onChange={setCat} allTxs={txs} savedCategories={savedCats} placeholder="Ex: Alimentacao, Saude..." />
+          <CategoryInput value={cat} onChange={setCat} savedCategories={savedCats} placeholder="Ex: Alimentacao, Saude..." />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
           <select style={S.select} value={conta} onChange={e => setConta(e.target.value)}>
             {customAccounts.map(a => <option key={a} value={a}>{a}</option>)}
@@ -594,7 +581,7 @@ function GastosScreen({ uid }: { uid: string }) {
           {fixedExpenses.length===0
             ? <div style={{ ...S.muted, textAlign:'center', padding:'16px 0' }}>Nenhum gasto fixo cadastrado ainda</div>
             : <div style={S.card}>
-                {fixedExpenses.map(fx => {
+                {[...fixedExpenses].sort((a,b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name)).map(fx => {
                   const paid = isPaid(fx)
                   return (
                     <div key={fx.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 0', borderBottom:'0.5px solid rgba(255,255,255,0.05)' }}>
@@ -612,8 +599,9 @@ function GastosScreen({ uid }: { uid: string }) {
                       <div style={{ fontSize:13, fontWeight:500, color:paid?'rgba(255,255,255,0.35)':'#E24B4A' }}>{fmt(fx.amount)}</div>
                       <button onClick={() => deleteFixed(fx.id)} style={{ background:'none', border:'none', color:'rgba(255,255,255,0.2)', cursor:'pointer', fontSize:16, padding:'0 2px' }}>x</button>
                     </div>
+                    </div>
                   )
-                })}
+                })})()}
                 <div style={{ paddingTop:10, display:'flex', justifyContent:'space-between' }}>
                   <div style={S.muted}>Total</div>
                   <div style={{ fontSize:13, fontWeight:500 }}>{fmt(fixedExpenses.reduce((s,f) => s+f.amount,0))}</div>
@@ -628,7 +616,7 @@ function GastosScreen({ uid }: { uid: string }) {
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
             <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={newFixAmt} onChange={e => setNewFixAmt(e.target.value)} />
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
-            <CategoryInput value={newFixCat} onChange={setNewFixCat} allTxs={txs} savedCategories={savedCats} placeholder="Ex: Moradia, Servicos..." />
+            <CategoryInput value={newFixCat} onChange={setNewFixCat} savedCategories={savedCats} placeholder="Ex: Moradia, Servicos..." />
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
             <select style={{ ...S.select, marginBottom:0 }} value={newFixAccount} onChange={e => setNewFixAccount(e.target.value)}>
               {customAccounts.map(a => <option key={a} value={a}>{a}</option>)}
@@ -742,7 +730,7 @@ function ReceitasScreen({ uid }: { uid: string }) {
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Descricao</div>
           <input style={S.input} placeholder="Ex: Salario, Freelance..." value={desc} onChange={e => setDesc(e.target.value)} />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
-          <CategoryInput value={cat} onChange={setCat} allTxs={txs} savedCategories={savedCats} placeholder="Ex: Salario, Dividendos..." />
+          <CategoryInput value={cat} onChange={setCat} savedCategories={savedCats} placeholder="Ex: Salario, Dividendos..." />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
           <select style={S.select} value={conta} onChange={e => setConta(e.target.value)}>
             {customAccounts.map(a => <option key={a} value={a}>{a}</option>)}
