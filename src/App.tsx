@@ -458,8 +458,33 @@ function ContasScreen({ uid }: { uid: string }) {
   const [balances, setBalances] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
+  const [editMode, setEditMode] = useState(false)
+  const [accounts, setAccounts] = useState<string[]>(ACCOUNTS)
+  const [editNames, setEditNames] = useState<string[]>(ACCOUNTS)
+  const [newAccount, setNewAccount] = useState('')
   const mk = currentMonthKey()
   const pmk = prevMonthKey(mk)
+
+  const loadAccounts = useCallback(async () => {
+    try {
+      const snap = await getDocs(query(collection(db, 'users', uid, 'config')))
+      const cfg = snap.docs.find(d => d.id === 'accounts')
+      if (cfg) {
+        const list = cfg.data().list as string[]
+        setAccounts(list)
+        setEditNames(list)
+      }
+    } catch {}
+  }, [uid])
+
+  const saveAccounts = async (list: string[]) => {
+    const snap = await getDocs(query(collection(db, 'users', uid, 'config')))
+    const cfg = snap.docs.find(d => d.id === 'accounts')
+    if (cfg) await deleteDoc(doc(db, 'users', uid, 'config', cfg.id))
+    await addDoc(collection(db, 'users', uid, 'config'), { list, createdAt: Date.now() })
+    setAccounts(list)
+    setEditNames(list)
+  }
 
   const load = useCallback(async () => {
     const snap = await getDocs(query(collection(db, 'users', uid, 'accountEntries'), orderBy('createdAt', 'desc')))
@@ -471,7 +496,7 @@ function ContasScreen({ uid }: { uid: string }) {
     setBalances(init)
   }, [uid, mk])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { loadAccounts(); load() }, [loadAccounts, load])
 
   const salvar = async () => {
     setSaving(true)
@@ -490,11 +515,36 @@ function ContasScreen({ uid }: { uid: string }) {
     load()
   }
 
+  const salvarEdicao = async () => {
+    const cleaned = editNames.map(n => n.trim()).filter(n => n.length > 0)
+    await saveAccounts(cleaned)
+    if (newAccount.trim()) {
+      const updated = [...cleaned, newAccount.trim()]
+      await saveAccounts(updated)
+      setNewAccount('')
+    }
+    setEditMode(false)
+    setMsg('Contas atualizadas!')
+    setTimeout(() => setMsg(''), 2000)
+  }
+
+  const moverConta = (i: number, dir: 'up' | 'down') => {
+    const arr = [...editNames]
+    const j = dir === 'up' ? i - 1 : i + 1
+    if (j < 0 || j >= arr.length) return
+    ;[arr[i], arr[j]] = [arr[j], arr[i]]
+    setEditNames(arr)
+  }
+
+  const removerConta = (i: number) => {
+    setEditNames(prev => prev.filter((_, idx) => idx !== i))
+  }
+
   const prevEntries = entries.filter(e => e.month === pmk)
   const prevMap: Record<string, number> = {}
   prevEntries.forEach(e => { prevMap[e.account] = e.balance })
 
-  const totalAtual = ACCOUNTS.reduce((s, a) => s + (parseFloat(balances[a]?.replace(',', '.') || '0') || 0), 0)
+  const totalAtual = accounts.reduce((s, a) => s + (parseFloat(balances[a]?.replace(',', '.') || '0') || 0), 0)
   const totalPrev = prevEntries.reduce((s, e) => s + e.balance, 0)
   const diff = totalAtual - totalPrev
 
@@ -506,72 +556,114 @@ function ContasScreen({ uid }: { uid: string }) {
 
   return (
     <div style={S.screen}>
-      <div style={{ ...S.label, marginBottom: 4 }}>Mês de referência</div>
-      <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 16 }}>{monthLabel(mk)}</div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
-        <div style={{ ...S.card, marginBottom: 0 }}>
-          <div style={S.muted}>Total atual</div>
-          <div style={{ fontSize: 18, fontWeight: 600, marginTop: 4 }}>{fmt(totalAtual)}</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+        <div>
+          <div style={{ ...S.label, marginBottom: 4 }}>Mês de referência</div>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>{monthLabel(mk)}</div>
         </div>
-        <div style={{ ...S.card, marginBottom: 0 }}>
-          <div style={S.muted}>Variação</div>
-          <div style={{ fontSize: 18, fontWeight: 600, color: diff >= 0 ? '#00E5A0' : '#E24B4A', marginTop: 4 }}>
-            {diff >= 0 ? '+' : ''}{fmt(diff)}
-          </div>
-        </div>
-      </div>
-      {chartData.length > 1 && (
-        <div style={{ ...S.card, marginBottom: 12 }}>
-          <div style={S.label}>Histórico</div>
-          <div style={{ height: 120, marginTop: 8 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData}>
-                <defs>
-                  <linearGradient id="gradCont" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#00E5A0" stopOpacity={0.25} />
-                    <stop offset="95%" stopColor="#00E5A0" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="name" tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 10 }} axisLine={false} tickLine={false} />
-                <YAxis hide />
-                <Tooltip contentStyle={{ background: '#1C1D25', border: 'none', borderRadius: 10, color: '#fff', fontSize: 12 }}
-                  formatter={(value: number) => [fmt(value), 'Patrimônio']} />
-                <Area type="monotone" dataKey="total" stroke="#00E5A0" strokeWidth={2} fill="url(#gradCont)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-      <div style={S.card}>
-        <div style={S.label}>Saldos de {monthLabel(mk)}</div>
-        <div style={{ marginTop: 12 }}>
-          {ACCOUNTS.map(account => {
-            const prev = prevMap[account]
-            const curr = parseFloat(balances[account]?.replace(',', '.') || '0') || 0
-            const delta = prev !== undefined ? curr - prev : null
-            return (
-              <div key={account} style={{ marginBottom: 14 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500 }}>{account}</div>
-                  {delta !== null && (
-                    <div style={{ fontSize: 11, color: delta >= 0 ? '#00E5A0' : '#E24B4A' }}>
-                      {delta >= 0 ? '+' : ''}{fmt(delta)}
-                    </div>
-                  )}
-                </div>
-                <input style={{ ...S.input, marginBottom: 0 }} type="number" inputMode="decimal" placeholder="0,00"
-                  value={balances[account] || ''}
-                  onChange={e => setBalances(prev => ({ ...prev, [account]: e.target.value }))} />
-                {prev !== undefined && <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)', marginTop: 3 }}>Mês anterior: {fmt(prev)}</div>}
-              </div>
-            )
-          })}
-        </div>
-        {msg && <div style={{ textAlign: 'center', color: '#00E5A0', fontSize: 13, marginBottom: 10 }}>{msg}</div>}
-        <button style={{ ...S.btn, opacity: saving ? 0.6 : 1 }} onClick={salvar} disabled={saving}>
-          {saving ? 'Salvando...' : 'Salvar saldos do mês'}
+        <button onClick={() => { setEditMode(!editMode); setEditNames([...accounts]) }} style={{
+          background: editMode ? '#4E9EFF22' : '#13141A',
+          border: editMode ? '0.5px solid #4E9EFF' : '0.5px solid rgba(255,255,255,0.15)',
+          color: editMode ? '#4E9EFF' : 'rgba(255,255,255,0.5)',
+          borderRadius: 10, padding: '6px 14px', fontSize: 12, cursor: 'pointer',
+        }}>
+          {editMode ? 'Cancelar' : 'Editar contas'}
         </button>
       </div>
+
+      {editMode ? (
+        <div style={S.card}>
+          <div style={{ ...S.label, marginBottom: 12 }}>Editar contas</div>
+          {editNames.map((name, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <button onClick={() => moverConta(i, 'up')} disabled={i === 0} style={{ background: 'none', border: 'none', color: i === 0 ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: '2px 4px' }}>▲</button>
+                <button onClick={() => moverConta(i, 'down')} disabled={i === editNames.length - 1} style={{ background: 'none', border: 'none', color: i === editNames.length - 1 ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: '2px 4px' }}>▼</button>
+              </div>
+              <input
+                style={{ ...S.input, marginBottom: 0, flex: 1 }}
+                value={name}
+                onChange={e => setEditNames(prev => prev.map((n, idx) => idx === i ? e.target.value : n))}
+              />
+              <button onClick={() => removerConta(i)} style={{ background: 'none', border: 'none', color: '#E24B4A', cursor: 'pointer', fontSize: 18, padding: '0 4px', lineHeight: 1 }}>×</button>
+            </div>
+          ))}
+          <div style={{ borderTop: '0.5px solid rgba(255,255,255,0.08)', paddingTop: 12, marginTop: 4 }}>
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginBottom: 6 }}>Nova conta</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input style={{ ...S.input, marginBottom: 0, flex: 1 }} placeholder="Nome da conta..." value={newAccount} onChange={e => setNewAccount(e.target.value)} />
+            </div>
+          </div>
+          <button style={{ ...S.btn, marginTop: 14 }} onClick={salvarEdicao}>Salvar alterações</button>
+        </div>
+      ) : (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+            <div style={{ ...S.card, marginBottom: 0 }}>
+              <div style={S.muted}>Total atual</div>
+              <div style={{ fontSize: 18, fontWeight: 600, marginTop: 4 }}>{fmt(totalAtual)}</div>
+            </div>
+            <div style={{ ...S.card, marginBottom: 0 }}>
+              <div style={S.muted}>Variação</div>
+              <div style={{ fontSize: 18, fontWeight: 600, color: diff >= 0 ? '#00E5A0' : '#E24B4A', marginTop: 4 }}>
+                {diff >= 0 ? '+' : ''}{fmt(diff)}
+              </div>
+            </div>
+          </div>
+          {chartData.length > 1 && (
+            <div style={{ ...S.card, marginBottom: 12 }}>
+              <div style={S.label}>Histórico</div>
+              <div style={{ height: 120, marginTop: 8 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chartData}>
+                    <defs>
+                      <linearGradient id="gradCont" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#00E5A0" stopOpacity={0.25} />
+                        <stop offset="95%" stopColor="#00E5A0" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <XAxis dataKey="name" tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis hide />
+                    <Tooltip contentStyle={{ background: '#1C1D25', border: 'none', borderRadius: 10, color: '#fff', fontSize: 12 }}
+                      formatter={(value: number) => [fmt(value), 'Patrimônio']} />
+                    <Area type="monotone" dataKey="total" stroke="#00E5A0" strokeWidth={2} fill="url(#gradCont)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+          <div style={S.card}>
+            <div style={S.label}>Saldos de {monthLabel(mk)}</div>
+            <div style={{ marginTop: 12 }}>
+              {accounts.map(account => {
+                const prev = prevMap[account]
+                const curr = parseFloat(balances[account]?.replace(',', '.') || '0') || 0
+                const delta = prev !== undefined ? curr - prev : null
+                return (
+                  <div key={account} style={{ marginBottom: 14 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500 }}>{account}</div>
+                      {delta !== null && (
+                        <div style={{ fontSize: 11, color: delta >= 0 ? '#00E5A0' : '#E24B4A' }}>
+                          {delta >= 0 ? '+' : ''}{fmt(delta)}
+                        </div>
+                      )}
+                    </div>
+                    <input style={{ ...S.input, marginBottom: 0 }} type="number" inputMode="decimal" placeholder="0,00"
+                      value={balances[account] || ''}
+                      onChange={e => setBalances(prev => ({ ...prev, [account]: e.target.value }))} />
+                    {prev !== undefined && <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)', marginTop: 3 }}>Mês anterior: {fmt(prev)}</div>}
+                  </div>
+                )
+              })}
+            </div>
+            {msg && <div style={{ textAlign: 'center', color: '#00E5A0', fontSize: 13, marginBottom: 10 }}>{msg}</div>}
+            <button style={{ ...S.btn, opacity: saving ? 0.6 : 1 }} onClick={salvar} disabled={saving}>
+              {saving ? 'Salvando...' : 'Salvar saldos do mês'}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   )
 }
