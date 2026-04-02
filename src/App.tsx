@@ -107,6 +107,70 @@ const S = {
   navBtn: { padding:'8px 0 6px', border:'none', background:'transparent', color:'rgba(255,255,255,0.3)', fontSize:9, fontFamily:"'DM Sans',sans-serif", cursor:'pointer', display:'flex', flexDirection:'column' as const, alignItems:'center', gap:3 },
 }
 
+
+// ─── CATEGORY INPUT with autocomplete ─────────────────────────────────────
+
+function CategoryInput({ value, onChange, allTxs, placeholder }: {
+  value: string
+  onChange: (v: string) => void
+  allTxs: Transaction[]
+  placeholder?: string
+}) {
+  const [focused, setFocused] = useState(false)
+
+  // Get unique categories from existing transactions, sorted by frequency
+  const suggestions = (() => {
+    const freq: Record<string, number> = {}
+    allTxs.forEach(t => {
+      const c = t.category.trim().toLowerCase()
+      if (c && c !== 'receita' && c !== 'outros') freq[c] = (freq[c] || 0) + 1
+    })
+    return Object.entries(freq)
+      .sort((a, b) => b[1] - a[1])
+      .map(([c]) => c.charAt(0).toUpperCase() + c.slice(1))
+  })()
+
+  const filtered = value.trim()
+    ? suggestions.filter(s => s.toLowerCase().startsWith(value.toLowerCase()) && s.toLowerCase() !== value.toLowerCase())
+    : suggestions.slice(0, 6)
+
+  const select = (s: string) => {
+    onChange(s)
+    setFocused(false)
+  }
+
+  return (
+    <div style={{ position: 'relative', marginBottom: 12 }}>
+      <input
+        style={{ ...S.input, marginBottom: 0 }}
+        placeholder={placeholder || 'Ex: Alimentacao, Saude...'}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setTimeout(() => setFocused(false), 150)}
+      />
+      {focused && filtered.length > 0 && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200,
+          background: '#1C1D25', border: '0.5px solid rgba(255,255,255,0.15)',
+          borderRadius: 12, marginTop: 4, overflow: 'hidden',
+        }}>
+          {filtered.slice(0, 6).map(s => (
+            <div key={s} onMouseDown={() => select(s)} style={{
+              padding: '10px 14px', cursor: 'pointer', fontSize: 14,
+              color: 'rgba(255,255,255,0.8)',
+              borderBottom: '0.5px solid rgba(255,255,255,0.05)',
+            }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(78,158,255,0.1)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+            >{s}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── LOGIN ─────────────────────────────────────────────────────────────────
 
 function LoginScreen() {
@@ -330,7 +394,7 @@ function GastosScreen({ uid }: { uid: string }) {
     setSaving(true)
     await addDoc(collection(db,'users',uid,'transactions'), {
       type:'expense', value:v, description:desc.trim(),
-      category:cat.trim()||'Outros', account:conta, date:data, createdAt:Date.now(),
+      category:(cat.trim()||'Outros').replace(/\b\w/g,c=>c.toUpperCase()), account:conta, date:data, createdAt:Date.now(),
     })
     setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
     setTimeout(() => setMsg(''), 2000)
@@ -407,8 +471,8 @@ function GastosScreen({ uid }: { uid: string }) {
           <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={valor} onChange={e => setValor(e.target.value)} />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Descricao</div>
           <input style={S.input} placeholder="Ex: Mercado, Uber..." value={desc} onChange={e => setDesc(e.target.value)} />
-          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria (livre)</div>
-          <input style={S.input} placeholder="Ex: Alimentacao, Saude..." value={cat} onChange={e => setCat(e.target.value)} />
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
+          <CategoryInput value={cat} onChange={setCat} allTxs={txs} placeholder="Ex: Alimentacao, Saude..." />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
           <select style={S.select} value={conta} onChange={e => setConta(e.target.value)}>
             {customAccounts.map(a => <option key={a} value={a}>{a}</option>)}
@@ -460,7 +524,7 @@ function GastosScreen({ uid }: { uid: string }) {
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
             <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={newFixAmt} onChange={e => setNewFixAmt(e.target.value)} />
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
-            <input style={S.input} placeholder="Ex: Moradia, Servicos..." value={newFixCat} onChange={e => setNewFixCat(e.target.value)} />
+            <CategoryInput value={newFixCat} onChange={setNewFixCat} allTxs={txs} placeholder="Ex: Moradia, Servicos..." />
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
             <select style={{ ...S.select, marginBottom:0 }} value={newFixAccount} onChange={e => setNewFixAccount(e.target.value)}>
               {customAccounts.map(a => <option key={a} value={a}>{a}</option>)}
@@ -513,7 +577,7 @@ function ReceitasScreen({ uid }: { uid: string }) {
     setSaving(true)
     await addDoc(collection(db,'users',uid,'transactions'), {
       type:'income', value:v, description:desc.trim(),
-      category:cat.trim()||'Receita', account:conta, date:data, createdAt:Date.now(),
+      category:(cat.trim()||'Receita').replace(/\b\w/g,c=>c.toUpperCase()), account:conta, date:data, createdAt:Date.now(),
     })
     setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
     setTimeout(() => setMsg(''), 2000)
@@ -560,8 +624,8 @@ function ReceitasScreen({ uid }: { uid: string }) {
           <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={valor} onChange={e => setValor(e.target.value)} />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Descricao</div>
           <input style={S.input} placeholder="Ex: Salario, Freelance..." value={desc} onChange={e => setDesc(e.target.value)} />
-          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria (livre)</div>
-          <input style={S.input} placeholder="Ex: Salario, Dividendos..." value={cat} onChange={e => setCat(e.target.value)} />
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
+          <CategoryInput value={cat} onChange={setCat} allTxs={txs} placeholder="Ex: Salario, Dividendos..." />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
           <select style={S.select} value={conta} onChange={e => setConta(e.target.value)}>
             {customAccounts.map(a => <option key={a} value={a}>{a}</option>)}
