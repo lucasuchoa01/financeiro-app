@@ -4,9 +4,11 @@ import type { User } from 'firebase/auth'
 import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy } from 'firebase/firestore'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts'
 import { auth, db } from './firebase'
-// ─── TYPES & CONSTANTS (inline) ───────────────────────────────────────────
+
+// ─── TYPES ─────────────────────────────────────────────────────────────────
 
 export type TxType = 'expense' | 'income'
+export type AccountType = 'cash' | 'investment' | 'external'
 
 export interface Transaction {
   id: string
@@ -22,8 +24,24 @@ export interface Transaction {
 export interface AccountEntry {
   id: string
   account: string
+  accountType: AccountType
   balance: number
   month: string
+  createdAt: number
+}
+
+export interface AccountConfig {
+  name: string
+  type: AccountType
+}
+
+export interface Transfer {
+  id: string
+  amount: number
+  fromAccount: string
+  toAccount: string
+  month: string
+  description: string
   createdAt: number
 }
 
@@ -36,11 +54,22 @@ export interface FixedExpense {
   createdAt: number
 }
 
-const ACCOUNTS: string[] = []
-
 const MONTHLY_INCOME = 0
 
+const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
+  cash: 'Caixa',
+  investment: 'Investimento',
+  external: 'Trading Externo',
+}
+
+const ACCOUNT_TYPE_COLORS: Record<AccountType, string> = {
+  cash: '#4E9EFF',
+  investment: '#00E5A0',
+  external: '#FF9F43',
+}
+
 const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+const fmtPct = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`
 
 const todayStr = () => {
   const d = new Date()
@@ -77,22 +106,6 @@ const generateMonths = () => {
   return months.reverse()
 }
 
-// ─── HOOK: load custom accounts from Firestore ─────────────────────────────
-
-function useAccounts(uid: string) {
-  const [accounts, setAccounts] = useState<string[]>([])
-
-  useEffect(() => {
-    getDocs(collection(db,'users',uid,'config')).then(snap => {
-      const cfg = snap.docs.find(d => d.data().id==='accounts')
-      if (cfg) setAccounts(cfg.data().list as string[])
-    }).catch(() => {})
-  }, [uid])
-
-  return accounts
-}
-
-
 const S = {
   app: { display:'flex', flexDirection:'column' as const, height:'100%', width:'100%', maxWidth:430, margin:'0 auto', background:'#0A0B0F', position:'relative' as const },
   screen: { flex:1, overflowY:'auto' as const, padding:'20px 16px 90px' },
@@ -107,9 +120,35 @@ const S = {
   navBtn: { padding:'8px 0 6px', border:'none', background:'transparent', color:'rgba(255,255,255,0.3)', fontSize:9, fontFamily:"'DM Sans',sans-serif", cursor:'pointer', display:'flex', flexDirection:'column' as const, alignItems:'center', gap:3 },
 }
 
+// ─── HOOKS ─────────────────────────────────────────────────────────────────
 
+function useAccountConfigs(uid: string) {
+  const [configs, setConfigs] = useState<AccountConfig[]>([])
 
-// ─── HOOK: load/save categories from Firestore ─────────────────────────────
+  const load = useCallback(async () => {
+    try {
+      const snap = await getDocs(collection(db,'users',uid,'config'))
+      const cfg = snap.docs.find(d => d.data().id==='accountConfigs')
+      if (cfg) setConfigs(cfg.data().list as AccountConfig[])
+    } catch {}
+  }, [uid])
+
+  useEffect(() => { load() }, [load])
+
+  const save = async (list: AccountConfig[]) => {
+    const snap = await getDocs(collection(db,'users',uid,'config'))
+    const cfg = snap.docs.find(d => d.data().id==='accountConfigs')
+    if (cfg) await deleteDoc(doc(db,'users',uid,'config',cfg.id))
+    await addDoc(collection(db,'users',uid,'config'), { id:'accountConfigs', list, createdAt:Date.now() })
+    setConfigs(list)
+  }
+
+  const getType = (name: string): AccountType => {
+    return configs.find(c => c.name===name)?.type ?? 'cash'
+  }
+
+  return { configs, save, getType, reload: load }
+}
 
 function useCategories(uid: string) {
   const [categories, setCategories] = useState<string[]>([])
@@ -125,13 +164,11 @@ function useCategories(uid: string) {
   useEffect(() => { load() }, [load])
 
   const saveCategories = async (list: string[]) => {
-    try {
-      const snap = await getDocs(collection(db,'users',uid,'config'))
-      const cfg = snap.docs.find(d => d.data().id==='categories')
-      if (cfg) await deleteDoc(doc(db,'users',uid,'config',cfg.id))
-      await addDoc(collection(db,'users',uid,'config'), { id:'categories', list, createdAt:Date.now() })
-      setCategories(list)
-    } catch {}
+    const snap = await getDocs(collection(db,'users',uid,'config'))
+    const cfg = snap.docs.find(d => d.data().id==='categories')
+    if (cfg) await deleteDoc(doc(db,'users',uid,'config',cfg.id))
+    await addDoc(collection(db,'users',uid,'config'), { id:'categories', list, createdAt:Date.now() })
+    setCategories(list)
   }
 
   const addCategory = async (cat: string) => {
@@ -140,10 +177,63 @@ function useCategories(uid: string) {
     await saveCategories([...categories, normalized])
   }
 
-  return { categories, saveCategories, addCategory, reload: load }
+  return { categories, saveCategories, addCategory }
 }
 
-// ─── CATEGORY INPUT with autocomplete ─────────────────────────────────────
+// ─── HELPERS ───────────────────────────────────────────────────────────────
+
+function deduplicateEntries(entries: AccountEntry[]): AccountEntry[] {
+  const seen = new Set<string>()
+  return entries.filter(e => {
+    const key = `${e.month}_${e.account}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function calcPatrimonio(entries: AccountEntry[], month: string, validAccounts: AccountConfig[]) {
+  const validNames = validAccounts.filter(a => a.type !== 'external').map(a => a.name)
+  return entries.filter(e => e.month===month && validNames.includes(e.account)).reduce((s,e) => s+e.balance, 0)
+}
+
+function calcInvestimentos(entries: AccountEntry[], month: string, validAccounts: AccountConfig[]) {
+  const invNames = validAccounts.filter(a => a.type==='investment').map(a => a.name)
+  return entries.filter(e => e.month===month && invNames.includes(e.account)).reduce((s,e) => s+e.balance, 0)
+}
+
+function calcCaixa(entries: AccountEntry[], month: string, validAccounts: AccountConfig[]) {
+  const cashNames = validAccounts.filter(a => a.type==='cash').map(a => a.name)
+  return entries.filter(e => e.month===month && cashNames.includes(e.account)).reduce((s,e) => s+e.balance, 0)
+}
+
+function calcExternal(entries: AccountEntry[], month: string, validAccounts: AccountConfig[]) {
+  const extNames = validAccounts.filter(a => a.type==='external').map(a => a.name)
+  return entries.filter(e => e.month===month && extNames.includes(e.account)).reduce((s,e) => s+e.balance, 0)
+}
+
+function calcRendimento(
+  entries: AccountEntry[],
+  transfers: Transfer[],
+  month: string,
+  pmk: string,
+  validAccounts: AccountConfig[]
+) {
+  const invAtual = calcInvestimentos(entries, month, validAccounts)
+  const invAnterior = calcInvestimentos(entries, pmk, validAccounts)
+  // Net transfers INTO investments this month (aporte = positivo, saque = negativo)
+  const invNames = validAccounts.filter(a => a.type==='investment').map(a => a.name)
+  const aportes = transfers
+    .filter(t => t.month===month)
+    .reduce((s, t) => {
+      if (invNames.includes(t.toAccount) && !invNames.includes(t.fromAccount)) return s + t.amount
+      if (invNames.includes(t.fromAccount) && !invNames.includes(t.toAccount)) return s - t.amount
+      return s
+    }, 0)
+  return invAtual - invAnterior - aportes
+}
+
+// ─── SHARED COMPONENTS ─────────────────────────────────────────────────────
 
 function CategoryInput({ value, onChange, savedCategories, placeholder }: {
   value: string
@@ -152,956 +242,28 @@ function CategoryInput({ value, onChange, savedCategories, placeholder }: {
   placeholder?: string
 }) {
   const [focused, setFocused] = useState(false)
-
-  // Only use saved categories from Firestore
-  const suggestions = savedCategories
-
   const filtered = value.trim()
-    ? suggestions.filter(s => s.toLowerCase().startsWith(value.toLowerCase()) && s.toLowerCase() !== value.toLowerCase())
-    : suggestions.slice(0, 6)
-
-  const select = (s: string) => {
-    onChange(s)
-    setFocused(false)
-  }
+    ? savedCategories.filter(s => s.toLowerCase().startsWith(value.toLowerCase()) && s.toLowerCase()!==value.toLowerCase())
+    : savedCategories.slice(0,6)
 
   return (
-    <div style={{ position: 'relative', marginBottom: 12 }}>
-      <input
-        style={{ ...S.input, marginBottom: 0 }}
-        placeholder={placeholder || 'Ex: Alimentacao, Saude...'}
-        value={value}
+    <div style={{ position:'relative', marginBottom:12 }}>
+      <input style={{ ...S.input, marginBottom:0 }} placeholder={placeholder||'Categoria...'} value={value}
         onChange={e => onChange(e.target.value)}
         onFocus={() => setFocused(true)}
-        onBlur={() => setTimeout(() => setFocused(false), 150)}
-      />
-      {focused && filtered.length > 0 && (
-        <div style={{
-          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200,
-          background: '#1C1D25', border: '0.5px solid rgba(255,255,255,0.15)',
-          borderRadius: 12, marginTop: 4, overflow: 'hidden',
-        }}>
-          {filtered.slice(0, 6).map(s => (
-            <div key={s} onMouseDown={() => select(s)} style={{
-              padding: '10px 14px', cursor: 'pointer', fontSize: 14,
-              color: 'rgba(255,255,255,0.8)',
-              borderBottom: '0.5px solid rgba(255,255,255,0.05)',
-            }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(78,158,255,0.1)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-            >{s}</div>
+        onBlur={() => setTimeout(() => setFocused(false), 150)} />
+      {focused && filtered.length>0 && (
+        <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:200, background:'#1C1D25', border:'0.5px solid rgba(255,255,255,0.15)', borderRadius:12, marginTop:4, overflow:'hidden' }}>
+          {filtered.slice(0,6).map(s => (
+            <div key={s} onMouseDown={() => onChange(s)} style={{ padding:'10px 14px', cursor:'pointer', fontSize:14, color:'rgba(255,255,255,0.8)', borderBottom:'0.5px solid rgba(255,255,255,0.05)' }}
+              onMouseEnter={e => (e.currentTarget.style.background='rgba(78,158,255,0.1)')}
+              onMouseLeave={e => (e.currentTarget.style.background='transparent')}>{s}</div>
           ))}
         </div>
       )}
     </div>
   )
 }
-
-// ─── LOGIN ─────────────────────────────────────────────────────────────────
-
-function LoginScreen() {
-  const [email, setEmail] = useState('')
-  const [pass, setPass] = useState('')
-  const [isReg, setIsReg] = useState(false)
-  const [err, setErr] = useState('')
-  const [loading, setLoading] = useState(false)
-
-  const handle = async () => {
-    setErr(''); setLoading(true)
-    try {
-      if (isReg) await createUserWithEmailAndPassword(auth, email, pass)
-      else await signInWithEmailAndPassword(auth, email, pass)
-    } catch (e: unknown) {
-      const code = (e as {code?:string}).code ?? ''
-      const msgs: Record<string,string> = {
-        'auth/invalid-email':'E-mail invalido','auth/wrong-password':'Senha incorreta',
-        'auth/user-not-found':'Usuario nao encontrado','auth/email-already-in-use':'E-mail ja cadastrado',
-        'auth/weak-password':'Senha fraca (min. 6 caracteres)','auth/invalid-credential':'E-mail ou senha incorretos',
-      }
-      setErr(msgs[code]||'Erro ao entrar.')
-    }
-    setLoading(false)
-  }
-
-  return (
-    <div style={{ height:'100%', display:'flex', flexDirection:'column', justifyContent:'center', padding:'32px 24px', background:'#0A0B0F' }}>
-      <div style={{ marginBottom:40 }}>
-        <div style={{ fontSize:11, color:'#4E9EFF', letterSpacing:'0.15em', textTransform:'uppercase', fontFamily:"'DM Mono',monospace", marginBottom:8 }}>Financeiro Pessoal</div>
-        <div style={{ fontSize:28, fontWeight:600, letterSpacing:'-0.02em' }}>{isReg?'Criar conta':'Bem-vindo de volta'}</div>
-      </div>
-      <input style={S.input} placeholder="E-mail" type="email" value={email} onChange={e => setEmail(e.target.value)} />
-      <input style={S.input} placeholder="Senha" type="password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key==='Enter'&&handle()} />
-      {err && <div style={{ color:'#E24B4A', fontSize:13, marginBottom:12, textAlign:'center' }}>{err}</div>}
-      <button style={{ ...S.btn, opacity:loading?0.6:1 }} onClick={handle} disabled={loading}>{loading?'Aguarde...':isReg?'Criar conta':'Entrar'}</button>
-      <button style={S.btnGhost} onClick={() => { setIsReg(!isReg); setErr('') }}>{isReg?'Ja tenho conta':'Criar nova conta'}</button>
-    </div>
-  )
-}
-
-// ─── PAINEL ────────────────────────────────────────────────────────────────
-
-function PainelScreen({ uid }: { uid: string }) {
-  const [txs, setTxs] = useState<Transaction[]>([])
-  const [entries, setEntries] = useState<AccountEntry[]>([])
-  const [loading, setLoading] = useState(true)
-  const validAccounts = useAccounts(uid)
-  const mk = currentMonthKey()
-  const pmk = prevMonthKey(mk)
-
-  const load = useCallback(async () => {
-    const [txSnap, entSnap] = await Promise.all([
-      getDocs(query(collection(db,'users',uid,'transactions'), orderBy('createdAt','desc'))),
-      getDocs(query(collection(db,'users',uid,'accountEntries'), orderBy('createdAt','desc'))),
-    ])
-    setTxs(txSnap.docs.map(d => ({ id:d.id,...d.data() } as Transaction)))
-    // Deduplicate entries: keep latest per month+account
-    const rawEnt = entSnap.docs.map(d => ({ id:d.id,...d.data() } as AccountEntry))
-    const seen = new Set<string>()
-    setEntries(rawEnt.filter(e => {
-      const key = `${e.month}_${e.account}`
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    }))
-    setLoading(false)
-  }, [uid])
-
-  useEffect(() => { load() }, [load])
-
-  const now = new Date()
-  const thisMonthTxs = txs.filter(t => {
-    const p = t.date.split('/')
-    return parseInt(p[1])===now.getMonth()+1 && parseInt(p[2])===now.getFullYear()
-  })
-
-  const totalGasto = thisMonthTxs.filter(t => t.type==='expense').reduce((s,t) => s+t.value, 0)
-  const totalReceita = thisMonthTxs.filter(t => t.type==='income').reduce((s,t) => s+t.value, 0)
-  const renda = MONTHLY_INCOME + totalReceita
-  const saldo = renda - totalGasto
-
-  const validEntries = entries.filter(e => validAccounts.length===0 || validAccounts.includes(e.account))
-  const patrimonioAtual = validEntries.filter(e => e.month===mk).reduce((s,e) => s+e.balance, 0)
-  const patrimonioPrev = validEntries.filter(e => e.month===pmk).reduce((s,e) => s+e.balance, 0)
-  const rendimentoRS = patrimonioAtual - patrimonioPrev
-  const varPatrimonio = patrimonioPrev>0 ? ((patrimonioAtual-patrimonioPrev)/patrimonioPrev)*100 : 0
-  const meta10pct = patrimonioPrev*(10/12/100)
-
-  // group expenses by category for this month
-  const catMap: Record<string,number> = {}
-  thisMonthTxs.filter(t => t.type==='expense').forEach(t => { catMap[t.category]=(catMap[t.category]||0)+t.value })
-  const catData = Object.entries(catMap).sort((a,b) => b[1]-a[1]).slice(0,5).map(([cat,total]) => ({ cat, total }))
-
-  const allMonths = [...new Set(validEntries.map(e => e.month))].sort().slice(-6)
-  const chartData = allMonths.map(m => ({
-    name: monthLabel(m),
-    patrimonio: validEntries.filter(e => e.month===m).reduce((s,e) => s+e.balance, 0),
-  }))
-
-  if (loading) return <LoadingScreen />
-
-  return (
-    <div style={S.screen}>
-      <div style={{ marginBottom:16 }}>
-        <div style={S.label}>Saldo do mes</div>
-        <div style={{ fontSize:30, fontWeight:600, color:saldo>=0?'#00E5A0':'#E24B4A', letterSpacing:'-0.02em' }}>{fmt(saldo)}</div>
-        <div style={{ display:'flex', gap:16, marginTop:8 }}>
-          <span style={{ fontSize:12, color:'#00E5A0' }}>+{fmt(renda)} receitas</span>
-          <span style={{ fontSize:12, color:'#E24B4A' }}>-{fmt(totalGasto)} gastos</span>
-        </div>
-      </div>
-
-      <div style={S.card}>
-        <div style={S.label}>Patrimonio total</div>
-        <div style={{ fontSize:24, fontWeight:600, marginBottom:8 }}>{patrimonioAtual>0?fmt(patrimonioAtual):'...'}</div>
-        {patrimonioPrev>0 && (
-          <div style={{ display:'flex', gap:8 }}>
-            {[
-              { label:'Rendimento', val:fmt(rendimentoRS), color:rendimentoRS>=0?'#00E5A0':'#E24B4A', pre:rendimentoRS>=0?'+':'' },
-              { label:'Variacao', val:`${varPatrimonio.toFixed(2)}%`, color:varPatrimonio>=0?'#00E5A0':'#E24B4A', pre:varPatrimonio>=0?'+':'' },
-              { label:'Meta 10%', val:fmt(meta10pct), color:'#FF9F43', pre:'' },
-            ].map((item,i) => (
-              <div key={i} style={{ flex:1, background:'#1C1D25', borderRadius:10, padding:10 }}>
-                <div style={S.muted}>{item.label}</div>
-                <div style={{ fontSize:13, fontWeight:500, color:item.color, marginTop:2 }}>{item.pre}{item.val}</div>
-              </div>
-            ))}
-          </div>
-        )}
-        {patrimonioAtual===0 && <div style={{ ...S.muted, textAlign:'center', padding:'8px 0' }}>Atualize os saldos na aba Contas</div>}
-      </div>
-
-      {chartData.length>1 && (
-        <div style={S.card}>
-          <div style={S.label}>Evolucao do patrimonio</div>
-          <div style={{ height:140, marginTop:10 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData}>
-                <defs>
-                  <linearGradient id="gP" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#4E9EFF" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#4E9EFF" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)',fontSize:10 }} axisLine={false} tickLine={false} />
-                <YAxis hide />
-                <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v),'Patrimonio']} />
-                <Area type="monotone" dataKey="patrimonio" stroke="#4E9EFF" strokeWidth={2} fill="url(#gP)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      {catData.length>0 && (
-        <div style={S.card}>
-          <div style={S.label}>Top categorias do mes</div>
-          <div style={{ height:140, marginTop:10 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={catData} layout="vertical">
-                <XAxis type="number" hide />
-                <YAxis type="category" dataKey="cat" tick={{ fill:'rgba(255,255,255,0.5)',fontSize:11 }} axisLine={false} tickLine={false} width={80} />
-                <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v)]} />
-                <Bar dataKey="total" fill="#4E9EFF" radius={[0,6,6,0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      <div style={S.card}>
-        <div style={{ ...S.label, marginBottom:10 }}>Ultimos lancamentos</div>
-        {txs.slice(0,5).length===0
-          ? <div style={{ ...S.muted, textAlign:'center', padding:'12px 0' }}>Nenhum lancamento ainda</div>
-          : txs.slice(0,5).map(t => <TxRow key={t.id} tx={t} />)
-        }
-      </div>
-    </div>
-  )
-}
-
-
-// ─── CATEGORIES MANAGER ────────────────────────────────────────────────────
-
-function CategoriesManager({ uid, savedCats, onSave }: {
-  uid: string
-  savedCats: string[]
-  onSave: (list: string[]) => Promise<void>
-}) {
-  const [list, setList] = useState<string[]>([...savedCats])
-  const [newCat, setNewCat] = useState('')
-  const [msg, setMsg] = useState('')
-  const [saving, setSaving] = useState(false)
-
-  useEffect(() => { setList([...savedCats]) }, [savedCats])
-
-  const add = () => {
-    const normalized = newCat.trim().replace(/\b\w/g, c => c.toUpperCase())
-    if (!normalized || list.includes(normalized)) return
-    setList(prev => [...prev, normalized])
-    setNewCat('')
-  }
-
-  const remove = (i: number) => setList(prev => prev.filter((_,idx) => idx!==i))
-
-  const save = async () => {
-    setSaving(true)
-    await onSave(list)
-    setMsg('Categorias salvas!')
-    setTimeout(() => setMsg(''), 2000)
-    setSaving(false)
-  }
-
-  return (
-    <div>
-      <div style={{ ...S.label, marginBottom:10 }}>Gerenciar categorias</div>
-      <div style={S.card}>
-        {list.length===0
-          ? <div style={{ ...S.muted, textAlign:'center', padding:'12px 0' }}>Nenhuma categoria ainda</div>
-          : list.map((cat,i) => (
-            <div key={i} style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 0', borderBottom:'0.5px solid rgba(255,255,255,0.05)' }}>
-              <div style={{ flex:1, fontSize:13 }}>{cat}</div>
-              <button onClick={() => remove(i)} style={{ background:'none', border:'none', color:'#E24B4A', cursor:'pointer', fontSize:18, padding:'0 4px', lineHeight:1 }}>x</button>
-            </div>
-          ))
-        }
-        <div style={{ borderTop: list.length>0 ? '0.5px solid rgba(255,255,255,0.08)' : 'none', paddingTop:12, marginTop:list.length>0?8:0, display:'flex', gap:8 }}>
-          <input
-            style={{ ...S.input, marginBottom:0, flex:1 }}
-            placeholder="Nova categoria..."
-            value={newCat}
-            onChange={e => setNewCat(e.target.value)}
-            onKeyDown={e => e.key==='Enter' && add()}
-          />
-          <button onClick={add} style={{ padding:'12px 16px', background:'#13141A', border:'0.5px solid rgba(255,255,255,0.15)', borderRadius:12, color:'#4E9EFF', fontSize:18, cursor:'pointer', lineHeight:1 }}>+</button>
-        </div>
-      </div>
-      {msg && <div style={{ textAlign:'center', color:'#00E5A0', fontSize:13, margin:'8px 0' }}>{msg}</div>}
-      <button style={{ ...S.btn, opacity:saving?0.6:1 }} onClick={save} disabled={saving}>{saving?'Salvando...':'Salvar categorias'}</button>
-    </div>
-  )
-}
-
-
-function FixedExpenseList({ fixedExpenses, isPaid, togglePaid, deleteFixed }: {
-  fixedExpenses: FixedExpense[]
-  isPaid: (fx: FixedExpense) => boolean
-  togglePaid: (fx: FixedExpense) => void
-  deleteFixed: (id: string) => void
-}) {
-  const sorted = [...fixedExpenses].sort((a,b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name))
-  const groups: Record<string, FixedExpense[]> = {}
-  sorted.forEach(fx => { if (!groups[fx.category]) groups[fx.category] = []; groups[fx.category].push(fx) })
-
-  return (
-    <>
-      {Object.entries(groups).map(([cat, items]) => (
-        <div key={cat}>
-          <div style={{ fontSize:10, color:'#4E9EFF', letterSpacing:'0.1em', textTransform:'uppercase', fontFamily:"'DM Mono',monospace", padding:'10px 0 4px' }}>{cat}</div>
-          {items.map(fx => {
-            const paid = isPaid(fx)
-            return (
-              <div key={fx.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 0', borderBottom:'0.5px solid rgba(255,255,255,0.05)' }}>
-                <button onClick={() => togglePaid(fx)} style={{ width:24, height:24, borderRadius:6, border:'none', cursor:'pointer', flexShrink:0, background:paid?'#00E5A0':'rgba(255,255,255,0.1)', display:'flex', alignItems:'center', justifyContent:'center' }}>
-                  {paid && <span style={{ color:'#0A0B0F', fontSize:14, fontWeight:700 }}>&#10003;</span>}
-                </button>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:13, fontWeight:500, color:paid?'rgba(255,255,255,0.4)':'#fff', textDecoration:paid?'line-through':'none' }}>{fx.name}</div>
-                  <div style={{ fontSize:10, color:'rgba(255,255,255,0.3)' }}>{fx.account || ''}</div>
-                </div>
-                <div style={{ fontSize:13, fontWeight:500, color:paid?'rgba(255,255,255,0.35)':'#E24B4A' }}>{fmt(fx.amount)}</div>
-                <button onClick={() => deleteFixed(fx.id)} style={{ background:'none', border:'none', color:'rgba(255,255,255,0.2)', cursor:'pointer', fontSize:16, padding:'0 2px' }}>x</button>
-              </div>
-            )
-          })}
-        </div>
-      ))}
-    </>
-  )
-}
-
-// ─── GASTOS ────────────────────────────────────────────────────────────────
-
-function GastosScreen({ uid }: { uid: string }) {
-  const [tab, setTab] = useState<'add'|'fixos'|'list'|'cats'>('add')
-  const [txs, setTxs] = useState<Transaction[]>([])
-  const [fixedExpenses, setFixedExpenses] = useState<FixedExpense[]>([])
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [valor, setValor] = useState('')
-  const [desc, setDesc] = useState('')
-  const [cat, setCat] = useState('')
-  const customAccounts = useAccounts(uid)
-  const { categories: savedCats, addCategory } = useCategories(uid)
-  const [conta, setConta] = useState('')
-  const [data, setData] = useState(todayStr())
-  const [msg, setMsg] = useState('')
-  // new fixed expense form
-  const [newFixName, setNewFixName] = useState('')
-  const [newFixAmt, setNewFixAmt] = useState('')
-  const [newFixCat, setNewFixCat] = useState('')
-  const [newFixAccount, setNewFixAccount] = useState('')
-  const [fixMsg, setFixMsg] = useState('')
-  const mk = currentMonthKey()
-
-  const load = useCallback(async () => {
-    const [txSnap, fxSnap] = await Promise.all([
-      getDocs(query(collection(db,'users',uid,'transactions'), orderBy('createdAt','desc'))),
-      getDocs(query(collection(db,'users',uid,'fixedExpenses'), orderBy('createdAt','asc'))),
-    ])
-    setTxs(txSnap.docs.map(d => ({ id:d.id,...d.data() } as Transaction)))
-    setFixedExpenses(fxSnap.docs.map(d => ({ id:d.id,...d.data() } as FixedExpense)))
-    setLoading(false)
-  }, [uid])
-
-  useEffect(() => { load() }, [load])
-
-  const salvar = async () => {
-    const v = parseFloat(valor.replace(',','.'))
-    if (!v||v<=0||!desc.trim()) { setMsg('Preencha valor e descricao'); return }
-    setSaving(true)
-    await addDoc(collection(db,'users',uid,'transactions'), {
-      type:'expense', value:v, description:desc.trim(),
-      category:(cat.trim()||'Outros').replace(/\b\w/g,c=>c.toUpperCase()), account:conta, date:data, createdAt:Date.now(),
-    })
-    const normalizedCat = (cat.trim()||'Outros').replace(/\b\w/g,c=>c.toUpperCase())
-    await addCategory(normalizedCat)
-    setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
-    setTimeout(() => setMsg(''), 2000)
-    setSaving(false)
-    load()
-  }
-
-  const deletar = async (id: string) => {
-    await deleteDoc(doc(db,'users',uid,'transactions',id))
-    load()
-  }
-
-  const addFixed = async () => {
-    const v = parseFloat(newFixAmt.replace(',','.'))
-    if (!newFixName.trim()||!v||v<=0) { setFixMsg('Preencha nome e valor'); return }
-    await addDoc(collection(db,'users',uid,'fixedExpenses'), {
-      name:newFixName.trim(), amount:v, category:newFixCat.trim()||'Fixo',
-      account:newFixAccount||customAccounts[0]||'', createdAt:Date.now(),
-    })
-    setNewFixName(''); setNewFixAmt(''); setNewFixCat(''); setNewFixAccount('')
-    setFixMsg('Gasto fixo adicionado!')
-    setTimeout(() => setFixMsg(''), 2000)
-    load()
-  }
-
-  const deleteFixed = async (id: string) => {
-    await deleteDoc(doc(db,'users',uid,'fixedExpenses',id))
-    load()
-  }
-
-  const isPaid = (fx: FixedExpense) => {
-    const [y,m] = mk.split('-')
-    return txs.some(t =>
-      t.description===`[FIXO] ${fx.name}` &&
-      t.date.endsWith(`/${m}/${y}`) &&
-      t.type==='expense'
-    )
-  }
-
-  const togglePaid = async (fx: FixedExpense) => {
-    const [y,m] = mk.split('-')
-    const alreadyPaid = isPaid(fx)
-    if (alreadyPaid) {
-      // remove transaction
-      const relatedTx = txs.find(t => t.description===`[FIXO] ${fx.name}` && t.date.endsWith(`/${m}/${y}`) && t.type==='expense')
-      if (relatedTx) await deleteDoc(doc(db,'users',uid,'transactions',relatedTx.id))
-    } else {
-      // create transaction
-      await addDoc(collection(db,'users',uid,'transactions'), {
-        type:'expense', value:fx.amount, description:`[FIXO] ${fx.name}`,
-        category:fx.category, account:fx.account||customAccounts[0]||'', date:`01/${m}/${y}`, createdAt:Date.now(),
-      })
-    }
-    load()
-  }
-
-  useEffect(() => { if (customAccounts.length > 0 && !conta) setConta(customAccounts[0]) }, [customAccounts, conta])
-
-  const expenseTxs = txs.filter(t => t.type==='expense')
-
-  if (loading) return <LoadingScreen />
-
-  return (
-    <div style={S.screen}>
-      <div style={{ display:'flex', gap:6, marginBottom:16 }}>
-        {([['add','Novo'],['fixos','Fixos'],['list',`Historico (${expenseTxs.length})`],['cats','Categorias']] as [string,string][]).map(([k,label]) => (
-          <button key={k} onClick={() => setTab(k as typeof tab)} style={{ flex:1, padding:'10px 4px', borderRadius:10, border:'none', cursor:'pointer', fontSize:11, fontWeight:tab===k?600:400, background:tab===k?'#4E9EFF':'#13141A', color:tab===k?'#fff':'rgba(255,255,255,0.4)' }}>{label}</button>
-        ))}
-      </div>
-
-      {tab==='add' && (
-        <>
-          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
-          <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={valor} onChange={e => setValor(e.target.value)} />
-          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Descricao</div>
-          <input style={S.input} placeholder="Ex: Mercado, Uber..." value={desc} onChange={e => setDesc(e.target.value)} />
-          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
-          <CategoryInput value={cat} onChange={setCat} savedCategories={savedCats} placeholder="Ex: Alimentacao, Saude..." />
-          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
-          <select style={S.select} value={conta} onChange={e => setConta(e.target.value)}>
-            {customAccounts.map(a => <option key={a} value={a}>{a}</option>)}
-          </select>
-          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Data</div>
-          <input style={S.input} placeholder="dd/mm/aaaa" value={data} onChange={e => setData(e.target.value)} />
-          {msg && <div style={{ textAlign:'center', fontSize:13, color:msg==='Salvo!'?'#00E5A0':'#E24B4A', marginBottom:8 }}>{msg}</div>}
-          <button style={{ ...S.btn, opacity:saving?0.6:1 }} onClick={salvar} disabled={saving}>{saving?'Salvando...':'Salvar gasto'}</button>
-        </>
-      )}
-
-      {tab==='fixos' && (
-        <>
-          <div style={{ ...S.label, marginBottom:8 }}>Gastos fixos — {monthLabel(mk)}</div>
-          {fixedExpenses.length===0
-            ? <div style={{ ...S.muted, textAlign:'center', padding:'16px 0' }}>Nenhum gasto fixo cadastrado ainda</div>
-            : <div style={S.card}>
-                <FixedExpenseList fixedExpenses={fixedExpenses} isPaid={isPaid} togglePaid={togglePaid} deleteFixed={deleteFixed} />
-                <div style={{ paddingTop:10, borderTop:'0.5px solid rgba(255,255,255,0.08)', display:'flex', justifyContent:'space-between' }}>
-                  <div style={S.muted}>Total</div>
-                  <div style={{ fontSize:13, fontWeight:500 }}>{fmt(fixedExpenses.reduce((s,f) => s+f.amount,0))}</div>
-                </div>
-              </div>
-          }
-
-          <div style={{ ...S.label, marginTop:16, marginBottom:8 }}>Adicionar gasto fixo</div>
-          <div style={S.card}>
-            <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Nome</div>
-            <input style={S.input} placeholder="Ex: Aluguel, Luz, Netflix..." value={newFixName} onChange={e => setNewFixName(e.target.value)} />
-            <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
-            <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={newFixAmt} onChange={e => setNewFixAmt(e.target.value)} />
-            <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
-            <CategoryInput value={newFixCat} onChange={setNewFixCat} savedCategories={savedCats} placeholder="Ex: Moradia, Servicos..." />
-            <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
-            <select style={{ ...S.select, marginBottom:0 }} value={newFixAccount} onChange={e => setNewFixAccount(e.target.value)}>
-              {customAccounts.map(a => <option key={a} value={a}>{a}</option>)}
-            </select>
-            {fixMsg && <div style={{ textAlign:'center', fontSize:12, color:fixMsg.includes('!')?'#00E5A0':'#E24B4A', margin:'8px 0' }}>{fixMsg}</div>}
-            <button style={{ ...S.btn, marginTop:12 }} onClick={addFixed}>Adicionar</button>
-          </div>
-        </>
-      )}
-
-      {tab==='list' && (
-        expenseTxs.length===0
-          ? <div style={{ ...S.muted, textAlign:'center', padding:'40px 0' }}>Nenhum gasto</div>
-          : <div style={S.card}>{expenseTxs.map(t => <TxRow key={t.id} tx={t} onDelete={() => deletar(t.id)} />)}</div>
-      )}
-
-      {tab==='cats' && (
-        <CategoriesManager uid={uid} savedCats={savedCats} onSave={async (list) => {
-          const snap = await getDocs(collection(db,'users',uid,'config'))
-          const cfg = snap.docs.find(d => d.data().id==='categories')
-          if (cfg) await deleteDoc(doc(db,'users',uid,'config',cfg.id))
-          await addDoc(collection(db,'users',uid,'config'), { id:'categories', list, createdAt:Date.now() })
-          window.location.reload()
-        }} />
-      )}
-    </div>
-  )
-}
-
-// ─── RECEITAS ──────────────────────────────────────────────────────────────
-
-function ReceitasScreen({ uid }: { uid: string }) {
-  const [tab, setTab] = useState<'add'|'list'>('add')
-  const [txs, setTxs] = useState<Transaction[]>([])
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [valor, setValor] = useState('')
-  const [desc, setDesc] = useState('')
-  const [cat, setCat] = useState('')
-  const customAccounts = useAccounts(uid)
-  const { categories: savedCats, addCategory } = useCategories(uid)
-  const [conta, setConta] = useState('')
-  const [data, setData] = useState(todayStr())
-  const [msg, setMsg] = useState('')
-  const [filterMonth, setFilterMonth] = useState(currentMonthKey())
-  const allMonths = generateMonths()
-
-  const load = useCallback(async () => {
-    const snap = await getDocs(query(collection(db,'users',uid,'transactions'), orderBy('createdAt','desc')))
-    const all = snap.docs.map(d => ({ id:d.id,...d.data() } as Transaction))
-    setTxs(all.filter(t => t.type==='income'))
-    setLoading(false)
-  }, [uid])
-
-  useEffect(() => { load() }, [load])
-  useEffect(() => { if (customAccounts.length > 0 && !conta) setConta(customAccounts[0]) }, [customAccounts, conta])
-
-  const salvar = async () => {
-    const v = parseFloat(valor.replace(',','.'))
-    if (!v||v<=0||!desc.trim()) { setMsg('Preencha valor e descricao'); return }
-    setSaving(true)
-    await addDoc(collection(db,'users',uid,'transactions'), {
-      type:'income', value:v, description:desc.trim(),
-      category:(cat.trim()||'Receita').replace(/\b\w/g,c=>c.toUpperCase()), account:conta, date:data, createdAt:Date.now(),
-    })
-    const normalizedCat = (cat.trim()||'Receita').replace(/\b\w/g,c=>c.toUpperCase())
-    await addCategory(normalizedCat)
-    setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
-    setTimeout(() => setMsg(''), 2000)
-    setSaving(false)
-    load()
-  }
-
-  const deletar = async (id: string) => {
-    await deleteDoc(doc(db,'users',uid,'transactions',id))
-    load()
-  }
-
-  // group by month for history
-  const filtered = txs.filter(t => {
-    const p = t.date.split('/')
-    const mk = `${p[2]}-${p[1]}`
-    return mk===filterMonth
-  })
-
-  const totalFiltered = filtered.reduce((s,t) => s+t.value, 0)
-
-  // monthly summary for chart
-  const monthMap: Record<string,number> = {}
-  txs.forEach(t => {
-    const p = t.date.split('/')
-    const mk = `${p[2]}-${p[1]}`
-    monthMap[mk]=(monthMap[mk]||0)+t.value
-  })
-  const chartData = Object.entries(monthMap).sort((a,b) => a[0].localeCompare(b[0])).slice(-6).map(([m,v]) => ({ name:monthLabel(m), total:v }))
-
-  if (loading) return <LoadingScreen />
-
-  return (
-    <div style={S.screen}>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, marginBottom:16 }}>
-        {([['add','Nova receita'],['list','Historico']] as const).map(([k,label]) => (
-          <button key={k} onClick={() => setTab(k)} style={{ padding:'10px', borderRadius:10, border:'none', cursor:'pointer', fontSize:14, fontWeight:tab===k?600:400, background:tab===k?'#00E5A0':'#13141A', color:tab===k?'#0A0B0F':'rgba(255,255,255,0.4)' }}>{label}</button>
-        ))}
-      </div>
-
-      {tab==='add' && (
-        <>
-          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
-          <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={valor} onChange={e => setValor(e.target.value)} />
-          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Descricao</div>
-          <input style={S.input} placeholder="Ex: Salario, Freelance..." value={desc} onChange={e => setDesc(e.target.value)} />
-          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
-          <CategoryInput value={cat} onChange={setCat} savedCategories={savedCats} placeholder="Ex: Salario, Dividendos..." />
-          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
-          <select style={S.select} value={conta} onChange={e => setConta(e.target.value)}>
-            {customAccounts.map(a => <option key={a} value={a}>{a}</option>)}
-          </select>
-          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Data</div>
-          <input style={S.input} placeholder="dd/mm/aaaa" value={data} onChange={e => setData(e.target.value)} />
-          {msg && <div style={{ textAlign:'center', fontSize:13, color:msg==='Salvo!'?'#00E5A0':'#E24B4A', marginBottom:8 }}>{msg}</div>}
-          <button style={{ ...S.btn, background:'#00E5A0', color:'#0A0B0F', opacity:saving?0.6:1 }} onClick={salvar} disabled={saving}>{saving?'Salvando...':'Salvar receita'}</button>
-        </>
-      )}
-
-      {tab==='list' && (
-        <>
-          {chartData.length>1 && (
-            <div style={{ ...S.card, marginBottom:12 }}>
-              <div style={S.label}>Receitas por mes</div>
-              <div style={{ height:120, marginTop:8 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={chartData}>
-                    <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)',fontSize:10 }} axisLine={false} tickLine={false} />
-                    <YAxis hide />
-                    <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v),'Receitas']} />
-                    <Bar dataKey="total" fill="#00E5A0" radius={[4,4,0,0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          )}
-
-          <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12 }}>
-            <select value={filterMonth} onChange={e => setFilterMonth(e.target.value)} style={{ ...S.select, marginBottom:0, flex:1 }}>
-              {allMonths.map(m => <option key={m} value={m} style={{ background:'#13141A' }}>{monthLabel(m)}</option>)}
-            </select>
-            <div style={{ fontSize:13, fontWeight:600, color:'#00E5A0', whiteSpace:'nowrap' }}>{fmt(totalFiltered)}</div>
-          </div>
-
-          {filtered.length===0
-            ? <div style={{ ...S.muted, textAlign:'center', padding:'32px 0' }}>Nenhuma receita em {monthLabel(filterMonth)}</div>
-            : <div style={S.card}>{filtered.map(t => <TxRow key={t.id} tx={t} onDelete={() => deletar(t.id)} />)}</div>
-          }
-        </>
-      )}
-    </div>
-  )
-}
-
-// ─── CONTAS ────────────────────────────────────────────────────────────────
-
-function ContasScreen({ uid }: { uid: string }) {
-  const allMonths = generateMonths()
-  const [selectedMonth, setSelectedMonth] = useState(currentMonthKey())
-  const [entries, setEntries] = useState<AccountEntry[]>([])
-  const [balances, setBalances] = useState<Record<string,string>>({})
-  const [saving, setSaving] = useState(false)
-  const [msg, setMsg] = useState('')
-  const [editMode, setEditMode] = useState(false)
-  const [accounts, setAccounts] = useState<string[]>([])
-  const [editNames, setEditNames] = useState<string[]>([])
-  const [newAccount, setNewAccount] = useState('')
-  const pmk = prevMonthKey(selectedMonth)
-
-  const loadAccounts = useCallback(async () => {
-    try {
-      const snap = await getDocs(collection(db,'users',uid,'config'))
-      const cfg = snap.docs.find(d => d.data().id==='accounts')
-      if (cfg) { const list = cfg.data().list as string[]; setAccounts(list); setEditNames(list) }
-    } catch {}
-  }, [uid])
-
-  const saveAccountsList = async (list: string[]) => {
-    const snap = await getDocs(collection(db,'users',uid,'config'))
-    const cfg = snap.docs.find(d => d.data().id==='accounts')
-    if (cfg) await deleteDoc(doc(db,'users',uid,'config',cfg.id))
-    await addDoc(collection(db,'users',uid,'config'), { id:'accounts', list, createdAt:Date.now() })
-    setAccounts(list); setEditNames(list)
-  }
-
-  const load = useCallback(async () => {
-    const snap = await getDocs(query(collection(db,'users',uid,'accountEntries'), orderBy('createdAt','desc')))
-    const raw = snap.docs.map(d => ({ id:d.id,...d.data() } as AccountEntry))
-    // Deduplicate: keep only the latest entry per month+account
-    const seen = new Set<string>()
-    const data = raw.filter(e => {
-      const key = `${e.month}_${e.account}`
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
-    setEntries(data)
-    const current = data.filter(e => e.month===selectedMonth)
-    const init: Record<string,string> = {}
-    current.forEach(e => { init[e.account]=String(e.balance) })
-    setBalances(init)
-  }, [uid, selectedMonth])
-
-  useEffect(() => { loadAccounts(); load() }, [loadAccounts, load])
-
-  const salvar = async () => {
-    setSaving(true)
-    const curr = entries.filter(e => e.month===selectedMonth)
-    await Promise.all(curr.map(e => deleteDoc(doc(db,'users',uid,'accountEntries',e.id))))
-    await Promise.all(
-      Object.entries(balances)
-        .filter(([,v]) => v!==''&&!isNaN(parseFloat(v)))
-        .map(([account,v]) => addDoc(collection(db,'users',uid,'accountEntries'), {
-          account, balance:parseFloat(v.replace(',','.')), month:selectedMonth, createdAt:Date.now(),
-        }))
-    )
-    setMsg('Saldos salvos!')
-    setTimeout(() => setMsg(''), 2500)
-    setSaving(false)
-    load()
-  }
-
-  const salvarEdicao = async () => {
-    const cleaned = editNames.map(n => n.trim()).filter(n => n.length>0)
-    const final = newAccount.trim() ? [...cleaned, newAccount.trim()] : cleaned
-    await saveAccountsList(final)
-    setNewAccount(''); setEditMode(false)
-    setMsg('Contas atualizadas!')
-    setTimeout(() => setMsg(''), 2000)
-  }
-
-  const moverConta = (i: number, dir: 'up'|'down') => {
-    const arr = [...editNames]
-    const j = dir==='up' ? i-1 : i+1
-    if (j<0||j>=arr.length) return
-    ;[arr[i],arr[j]] = [arr[j],arr[i]]
-    setEditNames(arr)
-  }
-
-  const prevEntries = entries.filter(e => e.month===pmk)
-  const prevMap: Record<string,number> = {}
-  prevEntries.forEach(e => { prevMap[e.account]=e.balance })
-
-  const totalAtual = accounts.reduce((s,a) => s+(parseFloat(balances[a]?.replace(',','.')||'0')||0), 0)
-  const totalPrev = prevEntries.filter(e => accounts.includes(e.account)).reduce((s,e) => s+e.balance, 0)
-  const diff = totalAtual - totalPrev
-
-  // Only count entries for accounts in the current list (ignore old/renamed accounts)
-  const validEntries = entries.filter(e => accounts.includes(e.account))
-  const allMonthsWithData = [...new Set(validEntries.map(e => e.month))].sort().slice(-6)
-  const chartData = allMonthsWithData.map(m => ({
-    name: monthLabel(m),
-    total: validEntries.filter(e => e.month===m).reduce((s,e) => s+e.balance, 0),
-  }))
-
-  return (
-    <div style={S.screen}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:14 }}>
-        <div>
-          <div style={S.label}>Mes de referencia</div>
-          <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} style={{ background:'transparent', border:'none', color:'#fff', fontSize:20, fontWeight:600, cursor:'pointer', outline:'none', padding:'2px 0', fontFamily:"'DM Sans',sans-serif" }}>
-            {allMonths.map(m => <option key={m} value={m} style={{ background:'#13141A' }}>{monthLabel(m)}</option>)}
-          </select>
-          <div style={{ fontSize:10, color:'rgba(255,255,255,0.25)', marginTop:2, fontFamily:"'DM Mono',monospace" }}>atualizar todo dia 5 do mes</div>
-        </div>
-        <button onClick={() => { setEditMode(!editMode); setEditNames([...accounts]) }} style={{ background:editMode?'#4E9EFF22':'#13141A', border:editMode?'0.5px solid #4E9EFF':'0.5px solid rgba(255,255,255,0.15)', color:editMode?'#4E9EFF':'rgba(255,255,255,0.5)', borderRadius:10, padding:'6px 14px', fontSize:12, cursor:'pointer' }}>
-          {editMode?'Cancelar':'Editar contas'}
-        </button>
-      </div>
-
-      {editMode ? (
-        <div style={S.card}>
-          <div style={{ ...S.label, marginBottom:12 }}>Gerenciar contas</div>
-          {editNames.map((name,i) => (
-            <div key={i} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
-              <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
-                <button onClick={() => moverConta(i,'up')} disabled={i===0} style={{ background:'none', border:'none', color:i===0?'rgba(255,255,255,0.15)':'rgba(255,255,255,0.5)', cursor:'pointer', fontSize:11, padding:'2px 4px' }}>&#9650;</button>
-                <button onClick={() => moverConta(i,'down')} disabled={i===editNames.length-1} style={{ background:'none', border:'none', color:i===editNames.length-1?'rgba(255,255,255,0.15)':'rgba(255,255,255,0.5)', cursor:'pointer', fontSize:11, padding:'2px 4px' }}>&#9660;</button>
-              </div>
-              <input style={{ ...S.input, marginBottom:0, flex:1 }} value={name} onChange={e => setEditNames(prev => prev.map((n,idx) => idx===i?e.target.value:n))} />
-              <button onClick={() => setEditNames(prev => prev.filter((_,idx) => idx!==i))} style={{ background:'none', border:'none', color:'#E24B4A', cursor:'pointer', fontSize:20, padding:'0 4px', lineHeight:1 }}>x</button>
-            </div>
-          ))}
-          <div style={{ borderTop:'0.5px solid rgba(255,255,255,0.08)', paddingTop:12, marginTop:4 }}>
-            <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:6 }}>+ Nova conta</div>
-            <input style={{ ...S.input, marginBottom:0 }} placeholder="Nome da conta..." value={newAccount} onChange={e => setNewAccount(e.target.value)} />
-          </div>
-          {msg && <div style={{ textAlign:'center', color:'#00E5A0', fontSize:13, margin:'8px 0' }}>{msg}</div>}
-          <button style={{ ...S.btn, marginTop:14 }} onClick={salvarEdicao}>Salvar alteracoes</button>
-        </div>
-      ) : (
-        <>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:12 }}>
-            <div style={{ ...S.card, marginBottom:0 }}>
-              <div style={S.muted}>Total {monthLabel(selectedMonth)}</div>
-              <div style={{ fontSize:18, fontWeight:600, marginTop:4 }}>{fmt(totalAtual)}</div>
-            </div>
-            <div style={{ ...S.card, marginBottom:0 }}>
-              <div style={S.muted}>Variacao</div>
-              <div style={{ fontSize:18, fontWeight:600, color:diff>=0?'#00E5A0':'#E24B4A', marginTop:4 }}>{diff>=0?'+':''}{fmt(diff)}</div>
-            </div>
-          </div>
-
-          {chartData.length>1 && (
-            <div style={{ ...S.card, marginBottom:12 }}>
-              <div style={S.label}>Historico</div>
-              <div style={{ height:110, marginTop:8 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={chartData}>
-                    <defs>
-                      <linearGradient id="gC" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#00E5A0" stopOpacity={0.25} />
-                        <stop offset="95%" stopColor="#00E5A0" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)',fontSize:10 }} axisLine={false} tickLine={false} />
-                    <YAxis hide />
-                    <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v),'Patrimonio']} />
-                    <Area type="monotone" dataKey="total" stroke="#00E5A0" strokeWidth={2} fill="url(#gC)" />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          )}
-
-          <div style={S.card}>
-            <div style={S.label}>Saldos de {monthLabel(selectedMonth)}</div>
-            {accounts.length === 0 && (
-              <div style={{ ...S.muted, textAlign:'center', padding:'16px 0' }}>
-                Nenhuma conta cadastrada. Clique em "Editar contas" para adicionar.
-              </div>
-            )}
-            <div style={{ marginTop:12 }}>
-              {accounts.map(account => {
-                const prev = prevMap[account]
-                const curr = parseFloat(balances[account]?.replace(',','.')||'0')||0
-                const delta = prev!==undefined ? curr-prev : null
-                return (
-                  <div key={account} style={{ marginBottom:14 }}>
-                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
-                      <div style={{ fontSize:13, fontWeight:500 }}>{account}</div>
-                      {delta!==null && <div style={{ fontSize:11, color:delta>=0?'#00E5A0':'#E24B4A' }}>{delta>=0?'+':''}{fmt(delta)}</div>}
-                    </div>
-                    <input style={{ ...S.input, marginBottom:0 }} type="number" inputMode="decimal" placeholder="0,00"
-                      value={balances[account]||''}
-                      onChange={e => setBalances(prev => ({ ...prev, [account]:e.target.value }))} />
-                    {prev!==undefined && <div style={{ fontSize:10, color:'rgba(255,255,255,0.25)', marginTop:3 }}>Mes anterior: {fmt(prev)}</div>}
-                  </div>
-                )
-              })}
-            </div>
-            {msg && <div style={{ textAlign:'center', color:'#00E5A0', fontSize:13, marginBottom:10 }}>{msg}</div>}
-            <button style={{ ...S.btn, opacity:saving?0.6:1 }} onClick={salvar} disabled={saving}>{saving?'Salvando...':`Salvar saldos de ${monthLabel(selectedMonth)}`}</button>
-          </div>
-        </>
-      )}
-    </div>
-  )
-}
-
-// ─── RELATÓRIO ─────────────────────────────────────────────────────────────
-
-function RelatorioScreen({ uid }: { uid: string }) {
-  const [txs, setTxs] = useState<Transaction[]>([])
-  const [entries, setEntries] = useState<AccountEntry[]>([])
-  const [copied, setCopied] = useState(false)
-  const [selectedMonth, setSelectedMonth] = useState(currentMonthKey())
-  const allMonths = generateMonths()
-  const pmk = prevMonthKey(selectedMonth)
-
-  useEffect(() => {
-    Promise.all([
-      getDocs(query(collection(db,'users',uid,'transactions'), orderBy('createdAt','desc'))),
-      getDocs(query(collection(db,'users',uid,'accountEntries'), orderBy('createdAt','desc'))),
-    ]).then(([txSnap,entSnap]) => {
-      setTxs(txSnap.docs.map(d => ({ id:d.id,...d.data() } as Transaction)))
-      setEntries(entSnap.docs.map(d => ({ id:d.id,...d.data() } as AccountEntry)))
-    })
-  }, [uid])
-
-  const [selY, selM] = selectedMonth.split('-').map(Number)
-  const thisMonthTxs = txs.filter(t => {
-    const p = t.date.split('/')
-    return parseInt(p[1])===selM && parseInt(p[2])===selY
-  })
-
-  const totalGasto = thisMonthTxs.filter(t => t.type==='expense').reduce((s,t) => s+t.value, 0)
-  const totalReceita = thisMonthTxs.filter(t => t.type==='income').reduce((s,t) => s+t.value, 0)
-  const patrimonioAtual = entries.filter(e => e.month===selectedMonth).reduce((s,e) => s+e.balance, 0)
-  const patrimonioPrev = entries.filter(e => e.month===pmk).reduce((s,e) => s+e.balance, 0)
-  const rendimento = patrimonioAtual - patrimonioPrev
-  const varPct = patrimonioPrev>0 ? ((rendimento/patrimonioPrev)*100) : 0
-  const meta10 = patrimonioPrev*(10/12/100)
-
-  const catMap: Record<string,number> = {}
-  thisMonthTxs.filter(t => t.type==='expense').forEach(t => { catMap[t.category]=(catMap[t.category]||0)+t.value })
-  const catTotals = Object.entries(catMap).sort((a,b) => b[1]-a[1])
-
-  const top5 = thisMonthTxs.filter(t => t.type==='expense').sort((a,b) => b.value-a.value).slice(0,5)
-
-  const relatorio = `RELATORIO FINANCEIRO - ${monthLabel(selectedMonth)}
-Gerado em ${todayStr()}
-
-RECEITAS E GASTOS
-Receitas: ${fmt(totalReceita)}
-Gastos: ${fmt(totalGasto)}
-Saldo: ${fmt(totalReceita-totalGasto)}
-
-PATRIMONIO
-Atual: ${fmt(patrimonioAtual)}
-Anterior: ${fmt(patrimonioPrev)}
-Rendimento: ${fmt(rendimento)} (${varPct.toFixed(2)}%)
-Meta 10% a.a.: ${fmt(meta10)}
-${rendimento>=meta10?'Acima da meta':'Abaixo da meta'}
-
-SALDOS POR CONTA
-${entries.filter(e => e.month===selectedMonth).map(e => `- ${e.account}: ${fmt(e.balance)}`).join('\n')}
-
-GASTOS POR CATEGORIA
-${catTotals.map(([c,v]) => `${c}: ${fmt(v)}`).join('\n')}
-
-TOP 5 GASTOS
-${top5.map((t,i) => `${i+1}. ${t.description} - ${fmt(t.value)} [${t.category}]`).join('\n')}
-
-TODOS OS LANCAMENTOS
-${thisMonthTxs.map(t => `${t.type==='income'?'+':'-'} ${fmt(t.value)} | ${t.description} | ${t.category} | ${t.date}`).join('\n')}
-`
-
-  return (
-    <div style={S.screen}>
-      <div style={{ marginBottom:16 }}>
-        <div style={S.label}>Relatorio</div>
-        <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} style={{ background:'transparent', border:'none', color:'#fff', fontSize:20, fontWeight:600, cursor:'pointer', outline:'none', fontFamily:"'DM Sans',sans-serif" }}>
-          {allMonths.map(m => <option key={m} value={m} style={{ background:'#13141A' }}>{monthLabel(m)}</option>)}
-        </select>
-      </div>
-
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:10 }}>
-        <div style={{ ...S.card, marginBottom:0 }}>
-          <div style={S.muted}>Patrimonio</div>
-          <div style={{ fontSize:16, fontWeight:600, marginTop:4 }}>{fmt(patrimonioAtual)}</div>
-          <div style={{ fontSize:11, color:rendimento>=0?'#00E5A0':'#E24B4A', marginTop:2 }}>{rendimento>=0?'+':''}{fmt(rendimento)}</div>
-        </div>
-        <div style={{ ...S.card, marginBottom:0 }}>
-          <div style={S.muted}>Vs meta 10%</div>
-          <div style={{ fontSize:16, fontWeight:600, marginTop:4 }}>{fmt(meta10)}</div>
-          <div style={{ fontSize:11, color:rendimento>=meta10?'#00E5A0':'#FF9F43', marginTop:2 }}>{rendimento>=meta10?'No ritmo':'Abaixo'}</div>
-        </div>
-      </div>
-
-      <div style={S.card}>
-        <div style={{ ...S.label, marginBottom:10 }}>Texto para IA</div>
-        <div style={{ background:'#0D0E14', borderRadius:10, padding:12, fontFamily:"'DM Mono',monospace", fontSize:10.5, color:'rgba(255,255,255,0.6)', lineHeight:1.7, maxHeight:200, overflowY:'auto', whiteSpace:'pre-wrap' }}>{relatorio}</div>
-        <button style={{ ...S.btn, marginTop:12, background:copied?'#00E5A0':'#4E9EFF' }} onClick={() => { navigator.clipboard.writeText(relatorio).then(() => { setCopied(true); setTimeout(() => setCopied(false),2500) }) }}>{copied?'Copiado!':'Copiar relatorio'}</button>
-        <div style={{ ...S.muted, textAlign:'center', fontSize:11, marginTop:8 }}>Cole no ChatGPT ou Claude para analise</div>
-      </div>
-    </div>
-  )
-}
-
-// ─── SHARED ────────────────────────────────────────────────────────────────
 
 function TxRow({ tx, onDelete }: { tx: Transaction; onDelete?: () => void }) {
   const isInc = tx.type==='income'
@@ -1127,9 +289,930 @@ function LoadingScreen() {
   )
 }
 
-// ─── NAV ICONS ─────────────────────────────────────────────────────────────
+function MetricCard({ label, value, sub, subColor, accent }: { label: string; value: string; sub?: string; subColor?: string; accent?: string }) {
+  return (
+    <div style={{ background:'#13141A', border:`0.5px solid ${accent||'rgba(255,255,255,0.07)'}`, borderRadius:14, padding:'12px 14px' }}>
+      <div style={{ fontSize:10, color:accent||'rgba(255,255,255,0.4)', letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:4, fontFamily:"'DM Mono',monospace" }}>{label}</div>
+      <div style={{ fontSize:18, fontWeight:600 }}>{value}</div>
+      {sub && <div style={{ fontSize:11, color:subColor||'rgba(255,255,255,0.4)', marginTop:2 }}>{sub}</div>}
+    </div>
+  )
+}
 
-const icons: Record<string,string> = {
+function FixedExpenseList({ fixedExpenses, isPaid, togglePaid, deleteFixed }: {
+  fixedExpenses: FixedExpense[]
+  isPaid: (fx: FixedExpense) => boolean
+  togglePaid: (fx: FixedExpense) => void
+  deleteFixed: (id: string) => void
+}) {
+  const sorted = [...fixedExpenses].sort((a,b) => a.category.localeCompare(b.category)||a.name.localeCompare(b.name))
+  const groups: Record<string,FixedExpense[]> = {}
+  sorted.forEach(fx => { if (!groups[fx.category]) groups[fx.category]=[]; groups[fx.category].push(fx) })
+
+  return (
+    <>
+      {Object.entries(groups).map(([cat,items]) => (
+        <div key={cat}>
+          <div style={{ fontSize:10, color:'#4E9EFF', letterSpacing:'0.1em', textTransform:'uppercase', fontFamily:"'DM Mono',monospace", padding:'10px 0 4px' }}>{cat}</div>
+          {items.map(fx => {
+            const paid = isPaid(fx)
+            return (
+              <div key={fx.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 0', borderBottom:'0.5px solid rgba(255,255,255,0.05)' }}>
+                <button onClick={() => togglePaid(fx)} style={{ width:24, height:24, borderRadius:6, border:'none', cursor:'pointer', flexShrink:0, background:paid?'#00E5A0':'rgba(255,255,255,0.1)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                  {paid && <span style={{ color:'#0A0B0F', fontSize:14, fontWeight:700 }}>&#10003;</span>}
+                </button>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:13, fontWeight:500, color:paid?'rgba(255,255,255,0.4)':'#fff', textDecoration:paid?'line-through':'none' }}>{fx.name}</div>
+                  <div style={{ fontSize:10, color:'rgba(255,255,255,0.3)' }}>{fx.account||''}</div>
+                </div>
+                <div style={{ fontSize:13, fontWeight:500, color:paid?'rgba(255,255,255,0.35)':'#E24B4A' }}>{fmt(fx.amount)}</div>
+                <button onClick={() => deleteFixed(fx.id)} style={{ background:'none', border:'none', color:'rgba(255,255,255,0.2)', cursor:'pointer', fontSize:16, padding:'0 2px' }}>x</button>
+              </div>
+            )
+          })}
+        </div>
+      ))}
+    </>
+  )
+}
+
+function CategoriesManager({ uid, savedCats, onSave }: { uid: string; savedCats: string[]; onSave: (list: string[]) => Promise<void> }) {
+  const [list, setList] = useState<string[]>([...savedCats])
+  const [newCat, setNewCat] = useState('')
+  const [msg, setMsg] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => { setList([...savedCats]) }, [savedCats])
+
+  const add = () => {
+    const n = newCat.trim().replace(/\b\w/g,c=>c.toUpperCase())
+    if (!n||list.includes(n)) return
+    setList(prev => [...prev,n]); setNewCat('')
+  }
+
+  const save = async () => {
+    setSaving(true); await onSave(list)
+    setMsg('Salvo!'); setTimeout(() => setMsg(''),2000); setSaving(false)
+  }
+
+  return (
+    <div>
+      <div style={{ ...S.label, marginBottom:10 }}>Gerenciar categorias</div>
+      <div style={S.card}>
+        {list.length===0
+          ? <div style={{ ...S.muted, textAlign:'center', padding:'12px 0' }}>Nenhuma categoria</div>
+          : list.map((cat,i) => (
+            <div key={i} style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 0', borderBottom:'0.5px solid rgba(255,255,255,0.05)' }}>
+              <div style={{ flex:1, fontSize:13 }}>{cat}</div>
+              <button onClick={() => setList(prev => prev.filter((_,idx)=>idx!==i))} style={{ background:'none', border:'none', color:'#E24B4A', cursor:'pointer', fontSize:18, padding:'0 4px' }}>x</button>
+            </div>
+          ))
+        }
+        <div style={{ borderTop:list.length>0?'0.5px solid rgba(255,255,255,0.08)':'none', paddingTop:12, marginTop:list.length>0?8:0, display:'flex', gap:8 }}>
+          <input style={{ ...S.input, marginBottom:0, flex:1 }} placeholder="Nova categoria..." value={newCat} onChange={e => setNewCat(e.target.value)} onKeyDown={e => e.key==='Enter'&&add()} />
+          <button onClick={add} style={{ padding:'12px 16px', background:'#13141A', border:'0.5px solid rgba(255,255,255,0.15)', borderRadius:12, color:'#4E9EFF', fontSize:18, cursor:'pointer' }}>+</button>
+        </div>
+      </div>
+      {msg && <div style={{ textAlign:'center', color:'#00E5A0', fontSize:13, margin:'8px 0' }}>{msg}</div>}
+      <button style={{ ...S.btn, opacity:saving?0.6:1 }} onClick={save} disabled={saving}>{saving?'Salvando...':'Salvar categorias'}</button>
+    </div>
+  )
+}
+
+// ─── LOGIN ─────────────────────────────────────────────────────────────────
+
+function LoginScreen() {
+  const [email, setEmail] = useState('')
+  const [pass, setPass] = useState('')
+  const [isReg, setIsReg] = useState(false)
+  const [err, setErr] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const handle = async () => {
+    setErr(''); setLoading(true)
+    try {
+      if (isReg) await createUserWithEmailAndPassword(auth, email, pass)
+      else await signInWithEmailAndPassword(auth, email, pass)
+    } catch (e: unknown) {
+      const code = (e as {code?:string}).code??''
+      const msgs: Record<string,string> = {
+        'auth/invalid-email':'E-mail invalido','auth/wrong-password':'Senha incorreta',
+        'auth/user-not-found':'Usuario nao encontrado','auth/email-already-in-use':'E-mail ja cadastrado',
+        'auth/weak-password':'Senha fraca (min. 6 caracteres)','auth/invalid-credential':'E-mail ou senha incorretos',
+      }
+      setErr(msgs[code]||'Erro ao entrar.')
+    }
+    setLoading(false)
+  }
+
+  return (
+    <div style={{ height:'100%', display:'flex', flexDirection:'column', justifyContent:'center', padding:'32px 24px', background:'#0A0B0F' }}>
+      <div style={{ marginBottom:40 }}>
+        <div style={{ fontSize:11, color:'#4E9EFF', letterSpacing:'0.15em', textTransform:'uppercase', fontFamily:"'DM Mono',monospace", marginBottom:8 }}>Financeiro Pessoal</div>
+        <div style={{ fontSize:28, fontWeight:600, letterSpacing:'-0.02em' }}>{isReg?'Criar conta':'Bem-vindo'}</div>
+      </div>
+      <input style={S.input} placeholder="E-mail" type="email" value={email} onChange={e => setEmail(e.target.value)} />
+      <input style={S.input} placeholder="Senha" type="password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key==='Enter'&&handle()} />
+      {err && <div style={{ color:'#E24B4A', fontSize:13, marginBottom:12, textAlign:'center' }}>{err}</div>}
+      <button style={{ ...S.btn, opacity:loading?0.6:1 }} onClick={handle} disabled={loading}>{loading?'Aguarde...':isReg?'Criar conta':'Entrar'}</button>
+      <button style={S.btnGhost} onClick={() => {setIsReg(!isReg);setErr('')}}>{isReg?'Ja tenho conta':'Criar nova conta'}</button>
+    </div>
+  )
+}
+
+// ─── PAINEL ────────────────────────────────────────────────────────────────
+
+function PainelScreen({ uid }: { uid: string }) {
+  const [txs, setTxs] = useState<Transaction[]>([])
+  const [entries, setEntries] = useState<AccountEntry[]>([])
+  const [transfers, setTransfers] = useState<Transfer[]>([])
+  const [loading, setLoading] = useState(true)
+  const { configs } = useAccountConfigs(uid)
+  const mk = currentMonthKey()
+  const pmk = prevMonthKey(mk)
+
+  const load = useCallback(async () => {
+    const [txSnap, entSnap, trSnap] = await Promise.all([
+      getDocs(query(collection(db,'users',uid,'transactions'), orderBy('createdAt','desc'))),
+      getDocs(query(collection(db,'users',uid,'accountEntries'), orderBy('createdAt','desc'))),
+      getDocs(query(collection(db,'users',uid,'transfers'), orderBy('createdAt','desc'))),
+    ])
+    setTxs(txSnap.docs.map(d => ({id:d.id,...d.data()} as Transaction)))
+    setEntries(deduplicateEntries(entSnap.docs.map(d => ({id:d.id,...d.data()} as AccountEntry))))
+    setTransfers(trSnap.docs.map(d => ({id:d.id,...d.data()} as Transfer)))
+    setLoading(false)
+  }, [uid])
+
+  useEffect(() => { load() }, [load])
+
+  const now = new Date()
+  const thisMonthTxs = txs.filter(t => {
+    const p = t.date.split('/')
+    return parseInt(p[1])===now.getMonth()+1 && parseInt(p[2])===now.getFullYear()
+  })
+
+  const totalGasto = thisMonthTxs.filter(t => t.type==='expense').reduce((s,t) => s+t.value, 0)
+  const totalReceita = thisMonthTxs.filter(t => t.type==='income').reduce((s,t) => s+t.value, 0)
+  const saldo = MONTHLY_INCOME + totalReceita - totalGasto
+
+  const patrimonio = calcPatrimonio(entries, mk, configs)
+  const patrimonioPrev = calcPatrimonio(entries, pmk, configs)
+  const investimentos = calcInvestimentos(entries, mk, configs)
+  const investimentosPrev = calcInvestimentos(entries, pmk, configs)
+  const caixa = calcCaixa(entries, mk, configs)
+  const external = calcExternal(entries, mk, configs)
+  const rendimento = calcRendimento(entries, transfers, mk, pmk, configs)
+  const rendimentoPct = investimentosPrev > 0 ? (rendimento / investimentosPrev) * 100 : 0
+  const varPatrimonio = patrimonioPrev > 0 ? ((patrimonio - patrimonioPrev) / patrimonioPrev) * 100 : 0
+  const meta10pct = investimentosPrev * (10 / 12 / 100)
+
+  // chart
+  const allMonths = [...new Set(entries.map(e => e.month))].sort().slice(-6)
+  const chartData = allMonths.map(m => ({
+    name: monthLabel(m),
+    patrimonio: calcPatrimonio(entries, m, configs),
+    investimentos: calcInvestimentos(entries, m, configs),
+  }))
+
+  // top categories
+  const catMap: Record<string,number> = {}
+  thisMonthTxs.filter(t => t.type==='expense').forEach(t => { catMap[t.category]=(catMap[t.category]||0)+t.value })
+  const catData = Object.entries(catMap).sort((a,b) => b[1]-a[1]).slice(0,5).map(([cat,total]) => ({cat,total}))
+
+  if (loading) return <LoadingScreen />
+
+  return (
+    <div style={S.screen}>
+      {/* Saldo do mês */}
+      <div style={{ marginBottom:16 }}>
+        <div style={S.label}>Saldo do mes</div>
+        <div style={{ fontSize:30, fontWeight:600, color:saldo>=0?'#00E5A0':'#E24B4A', letterSpacing:'-0.02em' }}>{fmt(saldo)}</div>
+        <div style={{ display:'flex', gap:16, marginTop:6 }}>
+          <span style={{ fontSize:12, color:'#00E5A0' }}>+{fmt(totalReceita)}</span>
+          <span style={{ fontSize:12, color:'#E24B4A' }}>-{fmt(totalGasto)}</span>
+        </div>
+      </div>
+
+      {/* Patrimônio */}
+      <div style={S.card}>
+        <div style={S.label}>Patrimonio total</div>
+        <div style={{ fontSize:26, fontWeight:600, marginBottom:12 }}>{fmt(patrimonio)}</div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8 }}>
+          <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
+            <div style={{ fontSize:10, color:'#4E9EFF', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>CAIXA</div>
+            <div style={{ fontSize:14, fontWeight:500 }}>{fmt(caixa)}</div>
+          </div>
+          <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
+            <div style={{ fontSize:10, color:'#00E5A0', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>INVEST.</div>
+            <div style={{ fontSize:14, fontWeight:500 }}>{fmt(investimentos)}</div>
+          </div>
+          {external > 0 && (
+            <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
+              <div style={{ fontSize:10, color:'#FF9F43', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>TRADING</div>
+              <div style={{ fontSize:14, fontWeight:500 }}>{fmt(external)}</div>
+            </div>
+          )}
+        </div>
+        <div style={{ display:'flex', gap:8, marginTop:8 }}>
+          <div style={{ flex:1, background:'#1C1D25', borderRadius:10, padding:10 }}>
+            <div style={S.muted}>Variacao patrimonio</div>
+            <div style={{ fontSize:13, fontWeight:500, color:varPatrimonio>=0?'#00E5A0':'#E24B4A', marginTop:2 }}>{fmtPct(varPatrimonio)}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Rendimento dos investimentos */}
+      {investimentosPrev > 0 && (
+        <div style={{ ...S.card, border:'0.5px solid rgba(0,229,160,0.2)' }}>
+          <div style={{ ...S.label, color:'#00E5A0' }}>Rendimento dos investimentos</div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginTop:8 }}>
+            <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
+              <div style={S.muted}>Rendimento</div>
+              <div style={{ fontSize:14, fontWeight:500, color:rendimento>=0?'#00E5A0':'#E24B4A', marginTop:2 }}>{rendimento>=0?'+':''}{fmt(rendimento)}</div>
+            </div>
+            <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
+              <div style={S.muted}>%</div>
+              <div style={{ fontSize:14, fontWeight:500, color:rendimentoPct>=0?'#00E5A0':'#E24B4A', marginTop:2 }}>{fmtPct(rendimentoPct)}</div>
+            </div>
+            <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
+              <div style={S.muted}>Meta 10%</div>
+              <div style={{ fontSize:14, fontWeight:500, color:rendimento>=meta10pct?'#00E5A0':'#FF9F43', marginTop:2 }}>{fmt(meta10pct)}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Gráfico */}
+      {chartData.length > 1 && (
+        <div style={S.card}>
+          <div style={S.label}>Evolucao</div>
+          <div style={{ height:140, marginTop:10 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartData}>
+                <defs>
+                  <linearGradient id="gP" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#4E9EFF" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#4E9EFF" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="gI" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#00E5A0" stopOpacity={0.2} />
+                    <stop offset="95%" stopColor="#00E5A0" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)',fontSize:10 }} axisLine={false} tickLine={false} />
+                <YAxis hide />
+                <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v)]} />
+                <Area type="monotone" dataKey="patrimonio" name="Patrimonio" stroke="#4E9EFF" strokeWidth={2} fill="url(#gP)" />
+                <Area type="monotone" dataKey="investimentos" name="Investimentos" stroke="#00E5A0" strokeWidth={1.5} fill="url(#gI)" strokeDasharray="4 2" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{ display:'flex', gap:16, marginTop:4 }}>
+            <span style={{ fontSize:10, color:'#4E9EFF' }}>— Patrimônio</span>
+            <span style={{ fontSize:10, color:'#00E5A0' }}>-- Investimentos</span>
+          </div>
+        </div>
+      )}
+
+      {/* Top categorias */}
+      {catData.length > 0 && (
+        <div style={S.card}>
+          <div style={S.label}>Top gastos do mes</div>
+          <div style={{ height:130, marginTop:10 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={catData} layout="vertical">
+                <XAxis type="number" hide />
+                <YAxis type="category" dataKey="cat" tick={{ fill:'rgba(255,255,255,0.5)',fontSize:11 }} axisLine={false} tickLine={false} width={90} />
+                <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v)]} />
+                <Bar dataKey="total" fill="#4E9EFF" radius={[0,6,6,0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* Últimos lançamentos */}
+      <div style={S.card}>
+        <div style={{ ...S.label, marginBottom:10 }}>Ultimos lancamentos</div>
+        {txs.slice(0,5).length===0
+          ? <div style={{ ...S.muted, textAlign:'center', padding:'12px 0' }}>Nenhum lancamento ainda</div>
+          : txs.slice(0,5).map(t => <TxRow key={t.id} tx={t} />)
+        }
+      </div>
+    </div>
+  )
+}
+
+// ─── GASTOS ────────────────────────────────────────────────────────────────
+
+function GastosScreen({ uid }: { uid: string }) {
+  const [tab, setTab] = useState<'add'|'fixos'|'list'|'cats'>('add')
+  const [txs, setTxs] = useState<Transaction[]>([])
+  const [fixedExpenses, setFixedExpenses] = useState<FixedExpense[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [valor, setValor] = useState('')
+  const [desc, setDesc] = useState('')
+  const [cat, setCat] = useState('')
+  const [conta, setConta] = useState('')
+  const [data, setData] = useState(todayStr())
+  const [msg, setMsg] = useState('')
+  const [newFixName, setNewFixName] = useState('')
+  const [newFixAmt, setNewFixAmt] = useState('')
+  const [newFixCat, setNewFixCat] = useState('')
+  const [newFixAccount, setNewFixAccount] = useState('')
+  const [fixMsg, setFixMsg] = useState('')
+  const { configs } = useAccountConfigs(uid)
+  const { categories: savedCats, saveCategories, addCategory } = useCategories(uid)
+  const mk = currentMonthKey()
+
+  const accountNames = configs.map(c => c.name)
+
+  const load = useCallback(async () => {
+    const [txSnap, fxSnap] = await Promise.all([
+      getDocs(query(collection(db,'users',uid,'transactions'), orderBy('createdAt','desc'))),
+      getDocs(query(collection(db,'users',uid,'fixedExpenses'), orderBy('createdAt','asc'))),
+    ])
+    setTxs(txSnap.docs.map(d => ({id:d.id,...d.data()} as Transaction)))
+    setFixedExpenses(fxSnap.docs.map(d => ({id:d.id,...d.data()} as FixedExpense)))
+    setLoading(false)
+  }, [uid])
+
+  useEffect(() => { load() }, [load])
+  useEffect(() => { if (accountNames.length>0&&!conta) setConta(accountNames[0]) }, [accountNames, conta])
+
+  const salvar = async () => {
+    const v = parseFloat(valor.replace(',','.'))
+    if (!v||v<=0||!desc.trim()) { setMsg('Preencha valor e descricao'); return }
+    setSaving(true)
+    const normalizedCat = (cat.trim()||'Outros').replace(/\b\w/g,c=>c.toUpperCase())
+    await Promise.all([
+      addDoc(collection(db,'users',uid,'transactions'), { type:'expense', value:v, description:desc.trim(), category:normalizedCat, account:conta, date:data, createdAt:Date.now() }),
+      addCategory(normalizedCat),
+    ])
+    setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
+    setTimeout(() => setMsg(''),2000); setSaving(false); load()
+  }
+
+  const deletar = async (id: string) => { await deleteDoc(doc(db,'users',uid,'transactions',id)); load() }
+
+  const addFixed = async () => {
+    const v = parseFloat(newFixAmt.replace(',','.'))
+    if (!newFixName.trim()||!v||v<=0) { setFixMsg('Preencha nome e valor'); return }
+    await addDoc(collection(db,'users',uid,'fixedExpenses'), { name:newFixName.trim(), amount:v, category:newFixCat.trim()||'Fixo', account:newFixAccount||accountNames[0]||'', createdAt:Date.now() })
+    setNewFixName(''); setNewFixAmt(''); setNewFixCat(''); setNewFixAccount('')
+    setFixMsg('Adicionado!'); setTimeout(() => setFixMsg(''),2000); load()
+  }
+
+  const deleteFixed = async (id: string) => { await deleteDoc(doc(db,'users',uid,'fixedExpenses',id)); load() }
+
+  const isPaid = (fx: FixedExpense) => {
+    const [y,m] = mk.split('-')
+    return txs.some(t => t.description===`[FIXO] ${fx.name}` && t.date.endsWith(`/${m}/${y}`) && t.type==='expense')
+  }
+
+  const togglePaid = async (fx: FixedExpense) => {
+    const [y,m] = mk.split('-')
+    if (isPaid(fx)) {
+      const tx = txs.find(t => t.description===`[FIXO] ${fx.name}` && t.date.endsWith(`/${m}/${y}`) && t.type==='expense')
+      if (tx) await deleteDoc(doc(db,'users',uid,'transactions',tx.id))
+    } else {
+      await addDoc(collection(db,'users',uid,'transactions'), { type:'expense', value:fx.amount, description:`[FIXO] ${fx.name}`, category:fx.category, account:fx.account||accountNames[0]||'', date:`01/${m}/${y}`, createdAt:Date.now() })
+    }
+    load()
+  }
+
+  const expenseTxs = txs.filter(t => t.type==='expense')
+  if (loading) return <LoadingScreen />
+
+  return (
+    <div style={S.screen}>
+      <div style={{ display:'flex', gap:6, marginBottom:16 }}>
+        {([['add','Novo'],['fixos','Fixos'],['list',`Hist. (${expenseTxs.length})`],['cats','Categ.']] as [string,string][]).map(([k,label]) => (
+          <button key={k} onClick={() => setTab(k as typeof tab)} style={{ flex:1, padding:'10px 4px', borderRadius:10, border:'none', cursor:'pointer', fontSize:11, fontWeight:tab===k?600:400, background:tab===k?'#4E9EFF':'#13141A', color:tab===k?'#fff':'rgba(255,255,255,0.4)' }}>{label}</button>
+        ))}
+      </div>
+
+      {tab==='add' && (
+        <>
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
+          <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={valor} onChange={e => setValor(e.target.value)} />
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Descricao</div>
+          <input style={S.input} placeholder="Ex: Mercado, Uber..." value={desc} onChange={e => setDesc(e.target.value)} />
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
+          <CategoryInput value={cat} onChange={setCat} savedCategories={savedCats} placeholder="Ex: Alimentacao, Saude..." />
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
+          <select style={S.select} value={conta} onChange={e => setConta(e.target.value)}>
+            {accountNames.map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Data</div>
+          <input style={S.input} placeholder="dd/mm/aaaa" value={data} onChange={e => setData(e.target.value)} />
+          {msg && <div style={{ textAlign:'center', fontSize:13, color:msg==='Salvo!'?'#00E5A0':'#E24B4A', marginBottom:8 }}>{msg}</div>}
+          <button style={{ ...S.btn, opacity:saving?0.6:1 }} onClick={salvar} disabled={saving}>{saving?'Salvando...':'Salvar gasto'}</button>
+        </>
+      )}
+
+      {tab==='fixos' && (
+        <>
+          <div style={{ ...S.label, marginBottom:8 }}>Gastos fixos — {monthLabel(mk)}</div>
+          {fixedExpenses.length===0
+            ? <div style={{ ...S.muted, textAlign:'center', padding:'16px 0' }}>Nenhum gasto fixo cadastrado</div>
+            : <div style={S.card}>
+                <FixedExpenseList fixedExpenses={fixedExpenses} isPaid={isPaid} togglePaid={togglePaid} deleteFixed={deleteFixed} />
+                <div style={{ paddingTop:10, borderTop:'0.5px solid rgba(255,255,255,0.08)', display:'flex', justifyContent:'space-between' }}>
+                  <div style={S.muted}>Total</div>
+                  <div style={{ fontSize:13, fontWeight:500 }}>{fmt(fixedExpenses.reduce((s,f) => s+f.amount,0))}</div>
+                </div>
+              </div>
+          }
+          <div style={{ ...S.label, marginTop:16, marginBottom:8 }}>Adicionar gasto fixo</div>
+          <div style={S.card}>
+            <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Nome</div>
+            <input style={S.input} placeholder="Ex: Aluguel, Luz..." value={newFixName} onChange={e => setNewFixName(e.target.value)} />
+            <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
+            <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={newFixAmt} onChange={e => setNewFixAmt(e.target.value)} />
+            <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
+            <CategoryInput value={newFixCat} onChange={setNewFixCat} savedCategories={savedCats} placeholder="Ex: Moradia..." />
+            <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
+            <select style={{ ...S.select, marginBottom:0 }} value={newFixAccount} onChange={e => setNewFixAccount(e.target.value)}>
+              {accountNames.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
+            {fixMsg && <div style={{ textAlign:'center', fontSize:12, color:fixMsg.includes('!')?'#00E5A0':'#E24B4A', margin:'8px 0' }}>{fixMsg}</div>}
+            <button style={{ ...S.btn, marginTop:12 }} onClick={addFixed}>Adicionar</button>
+          </div>
+        </>
+      )}
+
+      {tab==='list' && (
+        expenseTxs.length===0
+          ? <div style={{ ...S.muted, textAlign:'center', padding:'40px 0' }}>Nenhum gasto</div>
+          : <div style={S.card}>{expenseTxs.map(t => <TxRow key={t.id} tx={t} onDelete={() => deletar(t.id)} />)}</div>
+      )}
+
+      {tab==='cats' && (
+        <CategoriesManager uid={uid} savedCats={savedCats} onSave={async (list) => { await saveCategories(list) }} />
+      )}
+    </div>
+  )
+}
+
+// ─── RECEITAS ──────────────────────────────────────────────────────────────
+
+function ReceitasScreen({ uid }: { uid: string }) {
+  const [tab, setTab] = useState<'add'|'list'>('add')
+  const [txs, setTxs] = useState<Transaction[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [valor, setValor] = useState('')
+  const [desc, setDesc] = useState('')
+  const [cat, setCat] = useState('')
+  const [conta, setConta] = useState('')
+  const [data, setData] = useState(todayStr())
+  const [msg, setMsg] = useState('')
+  const [filterMonth, setFilterMonth] = useState(currentMonthKey())
+  const allMonths = generateMonths()
+  const { configs } = useAccountConfigs(uid)
+  const { categories: savedCats, addCategory } = useCategories(uid)
+  const accountNames = configs.map(c => c.name)
+
+  const load = useCallback(async () => {
+    const snap = await getDocs(query(collection(db,'users',uid,'transactions'), orderBy('createdAt','desc')))
+    setTxs(snap.docs.map(d => ({id:d.id,...d.data()} as Transaction)).filter(t => t.type==='income'))
+    setLoading(false)
+  }, [uid])
+
+  useEffect(() => { load() }, [load])
+  useEffect(() => { if (accountNames.length>0&&!conta) setConta(accountNames[0]) }, [accountNames, conta])
+
+  const salvar = async () => {
+    const v = parseFloat(valor.replace(',','.'))
+    if (!v||v<=0||!desc.trim()) { setMsg('Preencha valor e descricao'); return }
+    setSaving(true)
+    const normalizedCat = (cat.trim()||'Receita').replace(/\b\w/g,c=>c.toUpperCase())
+    await Promise.all([
+      addDoc(collection(db,'users',uid,'transactions'), { type:'income', value:v, description:desc.trim(), category:normalizedCat, account:conta, date:data, createdAt:Date.now() }),
+      addCategory(normalizedCat),
+    ])
+    setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
+    setTimeout(() => setMsg(''),2000); setSaving(false); load()
+  }
+
+  const deletar = async (id: string) => { await deleteDoc(doc(db,'users',uid,'transactions',id)); load() }
+
+  const filtered = txs.filter(t => { const p=t.date.split('/'); return `${p[2]}-${p[1]}`===filterMonth })
+  const totalFiltered = filtered.reduce((s,t) => s+t.value, 0)
+  const monthMap: Record<string,number> = {}
+  txs.forEach(t => { const p=t.date.split('/'); const mk=`${p[2]}-${p[1]}`; monthMap[mk]=(monthMap[mk]||0)+t.value })
+  const chartData = Object.entries(monthMap).sort((a,b) => a[0].localeCompare(b[0])).slice(-6).map(([m,v]) => ({name:monthLabel(m),total:v}))
+
+  if (loading) return <LoadingScreen />
+
+  return (
+    <div style={S.screen}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, marginBottom:16 }}>
+        {([['add','Nova receita'],['list','Historico']] as const).map(([k,label]) => (
+          <button key={k} onClick={() => setTab(k)} style={{ padding:'10px', borderRadius:10, border:'none', cursor:'pointer', fontSize:14, fontWeight:tab===k?600:400, background:tab===k?'#00E5A0':'#13141A', color:tab===k?'#0A0B0F':'rgba(255,255,255,0.4)' }}>{label}</button>
+        ))}
+      </div>
+
+      {tab==='add' && (
+        <>
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
+          <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={valor} onChange={e => setValor(e.target.value)} />
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Descricao</div>
+          <input style={S.input} placeholder="Ex: Salario, Lucro Prop Firm..." value={desc} onChange={e => setDesc(e.target.value)} />
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
+          <CategoryInput value={cat} onChange={setCat} savedCategories={savedCats} placeholder="Ex: Salario, Dividendos..." />
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
+          <select style={S.select} value={conta} onChange={e => setConta(e.target.value)}>
+            {accountNames.map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Data</div>
+          <input style={S.input} placeholder="dd/mm/aaaa" value={data} onChange={e => setData(e.target.value)} />
+          {msg && <div style={{ textAlign:'center', fontSize:13, color:msg==='Salvo!'?'#00E5A0':'#E24B4A', marginBottom:8 }}>{msg}</div>}
+          <button style={{ ...S.btn, background:'#00E5A0', color:'#0A0B0F', opacity:saving?0.6:1 }} onClick={salvar} disabled={saving}>{saving?'Salvando...':'Salvar receita'}</button>
+        </>
+      )}
+
+      {tab==='list' && (
+        <>
+          {chartData.length>1 && (
+            <div style={{ ...S.card, marginBottom:12 }}>
+              <div style={S.label}>Receitas por mes</div>
+              <div style={{ height:110, marginTop:8 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData}>
+                    <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)',fontSize:10 }} axisLine={false} tickLine={false} />
+                    <YAxis hide />
+                    <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v),'Receitas']} />
+                    <Bar dataKey="total" fill="#00E5A0" radius={[4,4,0,0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+          <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12 }}>
+            <select value={filterMonth} onChange={e => setFilterMonth(e.target.value)} style={{ ...S.select, marginBottom:0, flex:1 }}>
+              {allMonths.map(m => <option key={m} value={m} style={{ background:'#13141A' }}>{monthLabel(m)}</option>)}
+            </select>
+            <div style={{ fontSize:13, fontWeight:600, color:'#00E5A0', whiteSpace:'nowrap' }}>{fmt(totalFiltered)}</div>
+          </div>
+          {filtered.length===0
+            ? <div style={{ ...S.muted, textAlign:'center', padding:'32px 0' }}>Nenhuma receita em {monthLabel(filterMonth)}</div>
+            : <div style={S.card}>{filtered.map(t => <TxRow key={t.id} tx={t} onDelete={() => deletar(t.id)} />)}</div>
+          }
+        </>
+      )}
+    </div>
+  )
+}
+
+// ─── CONTAS ────────────────────────────────────────────────────────────────
+
+function ContasScreen({ uid }: { uid: string }) {
+  const allMonths = generateMonths()
+  const [selectedMonth, setSelectedMonth] = useState(currentMonthKey())
+  const [entries, setEntries] = useState<AccountEntry[]>([])
+  const [transfers, setTransfers] = useState<Transfer[]>([])
+  const [balances, setBalances] = useState<Record<string,string>>({})
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [editMode, setEditMode] = useState(false)
+  const [editConfigs, setEditConfigs] = useState<AccountConfig[]>([])
+  const [newAccName, setNewAccName] = useState('')
+  const [newAccType, setNewAccType] = useState<AccountType>('cash')
+  // transfer form
+  const [showTransfer, setShowTransfer] = useState(false)
+  const [trFrom, setTrFrom] = useState('')
+  const [trTo, setTrTo] = useState('')
+  const [trAmt, setTrAmt] = useState('')
+  const [trDesc, setTrDesc] = useState('')
+  const [trMsg, setTrMsg] = useState('')
+  const { configs, save: saveConfigs } = useAccountConfigs(uid)
+  const pmk = prevMonthKey(selectedMonth)
+
+  const load = useCallback(async () => {
+    const [entSnap, trSnap] = await Promise.all([
+      getDocs(query(collection(db,'users',uid,'accountEntries'), orderBy('createdAt','desc'))),
+      getDocs(query(collection(db,'users',uid,'transfers'), orderBy('createdAt','desc'))),
+    ])
+    const raw = entSnap.docs.map(d => ({id:d.id,...d.data()} as AccountEntry))
+    setEntries(deduplicateEntries(raw))
+    setTransfers(trSnap.docs.map(d => ({id:d.id,...d.data()} as Transfer)))
+    const current = deduplicateEntries(raw).filter(e => e.month===selectedMonth)
+    const init: Record<string,string> = {}
+    current.forEach(e => { init[e.account]=String(e.balance) })
+    setBalances(init)
+  }, [uid, selectedMonth])
+
+  useEffect(() => { load() }, [load])
+  useEffect(() => { setEditConfigs([...configs]) }, [configs])
+
+  const salvar = async () => {
+    setSaving(true)
+    const curr = entries.filter(e => e.month===selectedMonth)
+    await Promise.all(curr.map(e => deleteDoc(doc(db,'users',uid,'accountEntries',e.id))))
+    await Promise.all(
+      configs.map(cfg => {
+        const v = parseFloat(balances[cfg.name]?.replace(',','.')||'0')
+        if (isNaN(v)||v===0) return Promise.resolve()
+        return addDoc(collection(db,'users',uid,'accountEntries'), { account:cfg.name, accountType:cfg.type, balance:v, month:selectedMonth, createdAt:Date.now() })
+      }).filter(Boolean)
+    )
+    setMsg('Saldos salvos!'); setTimeout(() => setMsg(''),2500); setSaving(false); load()
+  }
+
+  const saveAccountEdits = async () => {
+    const cleaned = editConfigs.filter(c => c.name.trim())
+    if (newAccName.trim()) cleaned.push({ name:newAccName.trim(), type:newAccType })
+    await saveConfigs(cleaned)
+    setNewAccName(''); setEditMode(false)
+    setMsg('Contas atualizadas!'); setTimeout(() => setMsg(''),2000)
+  }
+
+  const addTransfer = async () => {
+    const v = parseFloat(trAmt.replace(',','.'))
+    if (!v||v<=0||!trFrom||!trTo||trFrom===trTo) { setTrMsg('Preencha todos os campos'); return }
+    await addDoc(collection(db,'users',uid,'transfers'), { amount:v, fromAccount:trFrom, toAccount:trTo, month:selectedMonth, description:trDesc.trim()||`${trFrom} → ${trTo}`, createdAt:Date.now() })
+    setTrAmt(''); setTrDesc(''); setTrMsg('Transferencia registrada!')
+    setTimeout(() => { setTrMsg(''); setShowTransfer(false) }, 2000); load()
+  }
+
+  const prevEntries = entries.filter(e => e.month===pmk)
+  const prevMap: Record<string,number> = {}
+  prevEntries.forEach(e => { prevMap[e.account]=e.balance })
+
+  const totalAtual = calcPatrimonio(entries, selectedMonth, configs)
+  const totalPrev = calcPatrimonio(prevEntries, pmk, configs)
+  const diff = totalAtual - totalPrev
+  const investAtual = calcInvestimentos(entries, selectedMonth, configs)
+  const caixaAtual = calcCaixa(entries, selectedMonth, configs)
+  const externalAtual = calcExternal(entries, selectedMonth, configs)
+  const rendimento = calcRendimento(entries, transfers, selectedMonth, pmk, configs)
+  const rendPct = calcInvestimentos(entries, pmk, configs) > 0 ? (rendimento / calcInvestimentos(entries, pmk, configs)) * 100 : 0
+
+  const allMonthsData = [...new Set(entries.map(e => e.month))].sort().slice(-6)
+  const chartData = allMonthsData.map(m => ({ name:monthLabel(m), total:calcPatrimonio(entries,m,configs) }))
+
+  const groupedConfigs = configs.reduce((acc, cfg) => {
+    if (!acc[cfg.type]) acc[cfg.type] = []
+    acc[cfg.type].push(cfg)
+    return acc
+  }, {} as Record<AccountType, AccountConfig[]>)
+
+  return (
+    <div style={S.screen}>
+      {/* Header */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:14 }}>
+        <div>
+          <div style={S.label}>Mes de referencia</div>
+          <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} style={{ background:'transparent', border:'none', color:'#fff', fontSize:20, fontWeight:600, cursor:'pointer', outline:'none', fontFamily:"'DM Sans',sans-serif" }}>
+            {allMonths.map(m => <option key={m} value={m} style={{ background:'#13141A' }}>{monthLabel(m)}</option>)}
+          </select>
+          <div style={{ fontSize:10, color:'rgba(255,255,255,0.25)', fontFamily:"'DM Mono',monospace" }}>atualizar todo dia 5 do mes</div>
+        </div>
+        <button onClick={() => { setEditMode(!editMode); setEditConfigs([...configs]) }} style={{ background:editMode?'#4E9EFF22':'#13141A', border:editMode?'0.5px solid #4E9EFF':'0.5px solid rgba(255,255,255,0.15)', color:editMode?'#4E9EFF':'rgba(255,255,255,0.5)', borderRadius:10, padding:'6px 12px', fontSize:11, cursor:'pointer' }}>
+          {editMode?'Cancelar':'Editar contas'}
+        </button>
+      </div>
+
+      {editMode ? (
+        <div style={S.card}>
+          <div style={{ ...S.label, marginBottom:12 }}>Gerenciar contas</div>
+          {editConfigs.map((cfg,i) => (
+            <div key={i} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+              <input style={{ ...S.input, marginBottom:0, flex:2 }} value={cfg.name} onChange={e => setEditConfigs(prev => prev.map((c,idx) => idx===i?{...c,name:e.target.value}:c))} />
+              <select style={{ ...S.select, marginBottom:0, flex:1, fontSize:12 }} value={cfg.type} onChange={e => setEditConfigs(prev => prev.map((c,idx) => idx===i?{...c,type:e.target.value as AccountType}:c))}>
+                <option value="cash">Caixa</option>
+                <option value="investment">Invest.</option>
+                <option value="external">Trading</option>
+              </select>
+              <button onClick={() => setEditConfigs(prev => prev.filter((_,idx) => idx!==i))} style={{ background:'none', border:'none', color:'#E24B4A', cursor:'pointer', fontSize:18, flexShrink:0 }}>x</button>
+            </div>
+          ))}
+          <div style={{ borderTop:'0.5px solid rgba(255,255,255,0.08)', paddingTop:12, marginTop:8 }}>
+            <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:6 }}>+ Nova conta</div>
+            <div style={{ display:'flex', gap:8 }}>
+              <input style={{ ...S.input, marginBottom:0, flex:2 }} placeholder="Nome..." value={newAccName} onChange={e => setNewAccName(e.target.value)} />
+              <select style={{ ...S.select, marginBottom:0, flex:1, fontSize:12 }} value={newAccType} onChange={e => setNewAccType(e.target.value as AccountType)}>
+                <option value="cash">Caixa</option>
+                <option value="investment">Invest.</option>
+                <option value="external">Trading</option>
+              </select>
+            </div>
+          </div>
+          {msg && <div style={{ textAlign:'center', color:'#00E5A0', fontSize:13, margin:'8px 0' }}>{msg}</div>}
+          <button style={{ ...S.btn, marginTop:14 }} onClick={saveAccountEdits}>Salvar</button>
+        </div>
+      ) : (
+        <>
+          {/* Resumo */}
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:10 }}>
+            <MetricCard label="Patrimonio" value={fmt(totalAtual)} sub={`${diff>=0?'+':''}${fmt(diff)} vs anterior`} subColor={diff>=0?'#00E5A0':'#E24B4A'} />
+            <MetricCard label="Rendimento" value={fmt(rendimento)} sub={fmtPct(rendPct)} subColor={rendimento>=0?'#00E5A0':'#E24B4A'} accent="#00E5A0" />
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginBottom:10 }}>
+            <MetricCard label="Caixa" value={fmt(caixaAtual)} accent="#4E9EFF" />
+            <MetricCard label="Invest." value={fmt(investAtual)} accent="#00E5A0" />
+            {configs.some(c=>c.type==='external') && <MetricCard label="Trading" value={fmt(externalAtual)} accent="#FF9F43" />}
+          </div>
+
+          {/* Gráfico */}
+          {chartData.length>1 && (
+            <div style={{ ...S.card, marginBottom:12 }}>
+              <div style={S.label}>Historico</div>
+              <div style={{ height:100, marginTop:8 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chartData}>
+                    <defs>
+                      <linearGradient id="gC" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#00E5A0" stopOpacity={0.25} />
+                        <stop offset="95%" stopColor="#00E5A0" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)',fontSize:10 }} axisLine={false} tickLine={false} />
+                    <YAxis hide />
+                    <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v)]} />
+                    <Area type="monotone" dataKey="total" stroke="#00E5A0" strokeWidth={2} fill="url(#gC)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          {/* Transferência entre contas */}
+          <button onClick={() => setShowTransfer(!showTransfer)} style={{ ...S.btnGhost, marginTop:0, marginBottom:10, fontSize:12 }}>
+            {showTransfer ? 'Cancelar transferencia' : '+ Registrar transferencia entre contas'}
+          </button>
+          {showTransfer && (
+            <div style={{ ...S.card, marginBottom:12 }}>
+              <div style={{ ...S.label, marginBottom:10 }}>Transferencia</div>
+              <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>De</div>
+              <select style={S.select} value={trFrom} onChange={e => setTrFrom(e.target.value)}>
+                <option value="">Selecionar...</option>
+                {configs.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+              </select>
+              <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Para</div>
+              <select style={S.select} value={trTo} onChange={e => setTrTo(e.target.value)}>
+                <option value="">Selecionar...</option>
+                {configs.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+              </select>
+              <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
+              <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={trAmt} onChange={e => setTrAmt(e.target.value)} />
+              <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Descricao (opcional)</div>
+              <input style={{ ...S.input, marginBottom:0 }} placeholder="Ex: Aporte renda fixa..." value={trDesc} onChange={e => setTrDesc(e.target.value)} />
+              {trMsg && <div style={{ textAlign:'center', color:'#00E5A0', fontSize:12, margin:'8px 0' }}>{trMsg}</div>}
+              <button style={{ ...S.btn, marginTop:12 }} onClick={addTransfer}>Registrar transferencia</button>
+            </div>
+          )}
+
+          {/* Saldos agrupados por tipo */}
+          <div style={S.card}>
+            <div style={S.label}>Saldos de {monthLabel(selectedMonth)}</div>
+            <div style={{ marginTop:12 }}>
+              {(['cash','investment','external'] as AccountType[]).map(type => {
+                const group = groupedConfigs[type]||[]
+                if (group.length===0) return null
+                return (
+                  <div key={type} style={{ marginBottom:16 }}>
+                    <div style={{ fontSize:10, color:ACCOUNT_TYPE_COLORS[type], letterSpacing:'0.1em', textTransform:'uppercase', fontFamily:"'DM Mono',monospace", marginBottom:8 }}>{ACCOUNT_TYPE_LABELS[type]}</div>
+                    {group.map(cfg => {
+                      const prev = prevMap[cfg.name]
+                      const curr = parseFloat(balances[cfg.name]?.replace(',','.')||'0')||0
+                      const delta = prev!==undefined ? curr-prev : null
+                      return (
+                        <div key={cfg.name} style={{ marginBottom:12 }}>
+                          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
+                            <div style={{ fontSize:13, fontWeight:500 }}>{cfg.name}</div>
+                            {delta!==null && <div style={{ fontSize:11, color:delta>=0?'#00E5A0':'#E24B4A' }}>{delta>=0?'+':''}{fmt(delta)}</div>}
+                          </div>
+                          <input style={{ ...S.input, marginBottom:0 }} type="number" inputMode="decimal" placeholder="0,00"
+                            value={balances[cfg.name]||''}
+                            onChange={e => setBalances(prev => ({...prev,[cfg.name]:e.target.value}))} />
+                          {prev!==undefined && <div style={{ fontSize:10, color:'rgba(255,255,255,0.25)', marginTop:2 }}>Anterior: {fmt(prev)}</div>}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })}
+            </div>
+            {configs.length===0 && <div style={{ ...S.muted, textAlign:'center', padding:'16px 0' }}>Clique em "Editar contas" para adicionar.</div>}
+            {msg && <div style={{ textAlign:'center', color:'#00E5A0', fontSize:13, marginBottom:10 }}>{msg}</div>}
+            <button style={{ ...S.btn, opacity:saving?0.6:1 }} onClick={salvar} disabled={saving}>{saving?'Salvando...':`Salvar saldos de ${monthLabel(selectedMonth)}`}</button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ─── RELATÓRIO ─────────────────────────────────────────────────────────────
+
+function RelatorioScreen({ uid }: { uid: string }) {
+  const [txs, setTxs] = useState<Transaction[]>([])
+  const [entries, setEntries] = useState<AccountEntry[]>([])
+  const [transfers, setTransfers] = useState<Transfer[]>([])
+  const [copied, setCopied] = useState(false)
+  const [selectedMonth, setSelectedMonth] = useState(currentMonthKey())
+  const allMonths = generateMonths()
+  const { configs } = useAccountConfigs(uid)
+  const pmk = prevMonthKey(selectedMonth)
+
+  useEffect(() => {
+    Promise.all([
+      getDocs(query(collection(db,'users',uid,'transactions'), orderBy('createdAt','desc'))),
+      getDocs(query(collection(db,'users',uid,'accountEntries'), orderBy('createdAt','desc'))),
+      getDocs(query(collection(db,'users',uid,'transfers'), orderBy('createdAt','desc'))),
+    ]).then(([txSnap,entSnap,trSnap]) => {
+      setTxs(txSnap.docs.map(d => ({id:d.id,...d.data()} as Transaction)))
+      setEntries(deduplicateEntries(entSnap.docs.map(d => ({id:d.id,...d.data()} as AccountEntry))))
+      setTransfers(trSnap.docs.map(d => ({id:d.id,...d.data()} as Transfer)))
+    })
+  }, [uid])
+
+  const [selY,selM] = selectedMonth.split('-').map(Number)
+  const mTxs = txs.filter(t => { const p=t.date.split('/'); return parseInt(p[1])===selM&&parseInt(p[2])===selY })
+  const totalGasto = mTxs.filter(t => t.type==='expense').reduce((s,t) => s+t.value,0)
+  const totalReceita = mTxs.filter(t => t.type==='income').reduce((s,t) => s+t.value,0)
+  const patrimonio = calcPatrimonio(entries,selectedMonth,configs)
+  const patrimonioPrev = calcPatrimonio(entries,pmk,configs)
+  const investimentos = calcInvestimentos(entries,selectedMonth,configs)
+  const rendimento = calcRendimento(entries,transfers,selectedMonth,pmk,configs)
+  const rendPct = calcInvestimentos(entries,pmk,configs)>0 ? (rendimento/calcInvestimentos(entries,pmk,configs))*100 : 0
+  const meta10 = calcInvestimentos(entries,pmk,configs)*(10/12/100)
+
+  const catMap: Record<string,number> = {}
+  mTxs.filter(t => t.type==='expense').forEach(t => { catMap[t.category]=(catMap[t.category]||0)+t.value })
+  const top5 = mTxs.filter(t => t.type==='expense').sort((a,b) => b.value-a.value).slice(0,5)
+
+  const mTransfers = transfers.filter(t => t.month===selectedMonth)
+
+  const relatorio = `RELATORIO FINANCEIRO - ${monthLabel(selectedMonth)}
+Gerado em ${todayStr()}
+
+RECEITAS E GASTOS
+Receitas: ${fmt(totalReceita)}
+Gastos: ${fmt(totalGasto)}
+Saldo: ${fmt(totalReceita-totalGasto)}
+
+PATRIMONIO (sem trading externo)
+Atual: ${fmt(patrimonio)}
+Anterior: ${fmt(patrimonioPrev)}
+Variacao: ${fmt(patrimonio-patrimonioPrev)}
+
+INVESTIMENTOS
+Total investido: ${fmt(investimentos)}
+Rendimento real: ${fmt(rendimento)} (${fmtPct(rendPct)})
+Meta 10% a.a.: ${fmt(meta10)}
+${rendimento>=meta10?'Acima da meta':'Abaixo da meta'}
+
+SALDOS POR CONTA
+${entries.filter(e => e.month===selectedMonth && configs.some(c => c.name===e.account)).map(e => {
+  const type = configs.find(c => c.name===e.account)?.type||'cash'
+  return `- ${e.account} [${ACCOUNT_TYPE_LABELS[type]}]: ${fmt(e.balance)}`
+}).join('\n')}
+
+${mTransfers.length>0?`TRANSFERENCIAS REGISTRADAS
+${mTransfers.map(t => `- ${t.fromAccount} -> ${t.toAccount}: ${fmt(t.amount)} (${t.description})`).join('\n')}
+`:''}
+GASTOS POR CATEGORIA
+${Object.entries(catMap).sort((a,b) => b[1]-a[1]).map(([c,v]) => `${c}: ${fmt(v)}`).join('\n')}
+
+TOP 5 GASTOS
+${top5.map((t,i) => `${i+1}. ${t.description} - ${fmt(t.value)} [${t.category}]`).join('\n')}
+
+TODOS OS LANCAMENTOS
+${mTxs.map(t => `${t.type==='income'?'+':'-'} ${fmt(t.value)} | ${t.description} | ${t.category} | ${t.date}`).join('\n')}
+`
+
+  return (
+    <div style={S.screen}>
+      <div style={{ marginBottom:16 }}>
+        <div style={S.label}>Relatorio</div>
+        <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} style={{ background:'transparent', border:'none', color:'#fff', fontSize:20, fontWeight:600, cursor:'pointer', outline:'none', fontFamily:"'DM Sans',sans-serif" }}>
+          {allMonths.map(m => <option key={m} value={m} style={{ background:'#13141A' }}>{monthLabel(m)}</option>)}
+        </select>
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:10 }}>
+        <MetricCard label="Patrimonio" value={fmt(patrimonio)} sub={`${(patrimonio-patrimonioPrev)>=0?'+':''}${fmt(patrimonio-patrimonioPrev)}`} subColor={(patrimonio-patrimonioPrev)>=0?'#00E5A0':'#E24B4A'} />
+        <MetricCard label="Rendimento inv." value={fmt(rendimento)} sub={fmtPct(rendPct)} subColor={rendimento>=0?'#00E5A0':'#E24B4A'} accent="#00E5A0" />
+        <MetricCard label="Receitas" value={fmt(totalReceita)} accent="#00E5A0" />
+        <MetricCard label="Gastos" value={fmt(totalGasto)} accent="#E24B4A" />
+      </div>
+      <div style={S.card}>
+        <div style={{ ...S.label, marginBottom:10 }}>Texto para IA</div>
+        <div style={{ background:'#0D0E14', borderRadius:10, padding:12, fontFamily:"'DM Mono',monospace", fontSize:10.5, color:'rgba(255,255,255,0.6)', lineHeight:1.7, maxHeight:200, overflowY:'auto', whiteSpace:'pre-wrap' }}>{relatorio}</div>
+        <button style={{ ...S.btn, marginTop:12, background:copied?'#00E5A0':'#4E9EFF' }} onClick={() => { navigator.clipboard.writeText(relatorio).then(() => { setCopied(true); setTimeout(() => setCopied(false),2500) }) }}>{copied?'Copiado!':'Copiar relatorio'}</button>
+        <div style={{ ...S.muted, textAlign:'center', fontSize:11, marginTop:8 }}>Cole no ChatGPT ou Claude para analise</div>
+      </div>
+    </div>
+  )
+}
+
+// ─── NAV ───────────────────────────────────────────────────────────────────
+
+const navIcons: Record<string,string> = {
   painel:'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z',
   gastos:'M17 12h-5v5h5v-5zM16 1v2H8V1H6v2H5c-1.11 0-1.99.9-1.99 2L3 19c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-1V1h-2zm3 18H5V8h14v11z',
   receitas:'M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z',
@@ -1138,7 +1221,7 @@ const icons: Record<string,string> = {
 }
 
 const NavIcon = ({ type }: { type: string }) => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d={icons[type]} /></svg>
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d={navIcons[type]} /></svg>
 )
 
 // ─── APP ROOT ──────────────────────────────────────────────────────────────
@@ -1159,11 +1242,8 @@ export default function App() {
   if (!user) return <div style={{ height:'100vh', background:'#0A0B0F' }}><LoginScreen /></div>
 
   const navItems: { key: Screen; label: string }[] = [
-    { key:'painel', label:'Painel' },
-    { key:'gastos', label:'Gastos' },
-    { key:'receitas', label:'Receitas' },
-    { key:'contas', label:'Contas' },
-    { key:'relatorio', label:'Relatorio' },
+    { key:'painel', label:'Painel' },{ key:'gastos', label:'Gastos' },
+    { key:'receitas', label:'Receitas' },{ key:'contas', label:'Contas' },{ key:'relatorio', label:'Relatorio' },
   ]
 
   return (
