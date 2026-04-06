@@ -221,7 +221,6 @@ function calcRendimento(
 ) {
   const invAtual = calcInvestimentos(entries, month, validAccounts)
   const invAnterior = calcInvestimentos(entries, pmk, validAccounts)
-  // Net transfers INTO investments this month (aporte = positivo, saque = negativo)
   const invNames = validAccounts.filter(a => a.type==='investment').map(a => a.name)
   const aportes = transfers
     .filter(t => t.month===month)
@@ -466,7 +465,6 @@ function PainelScreen({ uid }: { uid: string }) {
   const varPatrimonio = patrimonioPrev > 0 ? ((patrimonio - patrimonioPrev) / patrimonioPrev) * 100 : 0
   const meta10pct = investimentosPrev * (10 / 12 / 100)
 
-  // chart
   const allMonths = [...new Set(entries.map(e => e.month))].sort().slice(-6)
   const chartData = allMonths.map(m => ({
     name: monthLabel(m),
@@ -474,7 +472,6 @@ function PainelScreen({ uid }: { uid: string }) {
     investimentos: calcInvestimentos(entries, m, configs),
   }))
 
-  // top categories
   const catMap: Record<string,number> = {}
   thisMonthTxs.filter(t => t.type==='expense').forEach(t => { catMap[t.category]=(catMap[t.category]||0)+t.value })
   const catData = Object.entries(catMap).sort((a,b) => b[1]-a[1]).slice(0,5).map(([cat,total]) => ({cat,total}))
@@ -483,7 +480,6 @@ function PainelScreen({ uid }: { uid: string }) {
 
   return (
     <div style={S.screen}>
-      {/* Saldo do mês */}
       <div style={{ marginBottom:16 }}>
         <div style={S.label}>Saldo do mes</div>
         <div style={{ fontSize:30, fontWeight:600, color:saldo>=0?'#00E5A0':'#E24B4A', letterSpacing:'-0.02em' }}>{fmt(saldo)}</div>
@@ -493,7 +489,6 @@ function PainelScreen({ uid }: { uid: string }) {
         </div>
       </div>
 
-      {/* Patrimônio */}
       <div style={S.card}>
         <div style={S.label}>Patrimonio total</div>
         <div style={{ fontSize:26, fontWeight:600, marginBottom:12 }}>{fmt(patrimonio)}</div>
@@ -521,7 +516,6 @@ function PainelScreen({ uid }: { uid: string }) {
         </div>
       </div>
 
-      {/* Rendimento dos investimentos */}
       {investimentosPrev > 0 && (
         <div style={{ ...S.card, border:'0.5px solid rgba(0,229,160,0.2)' }}>
           <div style={{ ...S.label, color:'#00E5A0' }}>Rendimento dos investimentos</div>
@@ -542,7 +536,6 @@ function PainelScreen({ uid }: { uid: string }) {
         </div>
       )}
 
-      {/* Gráfico */}
       {chartData.length > 1 && (
         <div style={S.card}>
           <div style={S.label}>Evolucao</div>
@@ -574,7 +567,6 @@ function PainelScreen({ uid }: { uid: string }) {
         </div>
       )}
 
-      {/* Top categorias */}
       {catData.length > 0 && (
         <div style={S.card}>
           <div style={S.label}>Top gastos do mes</div>
@@ -591,7 +583,6 @@ function PainelScreen({ uid }: { uid: string }) {
         </div>
       )}
 
-      {/* Últimos lançamentos */}
       <div style={S.card}>
         <div style={{ ...S.label, marginBottom:10 }}>Ultimos lancamentos</div>
         {txs.slice(0,5).length===0
@@ -881,7 +872,6 @@ function ContasScreen({ uid }: { uid: string }) {
   const [editConfigs, setEditConfigs] = useState<AccountConfig[]>([])
   const [newAccName, setNewAccName] = useState('')
   const [newAccType, setNewAccType] = useState<AccountType>('cash')
-  // transfer form
   const [showTransfer, setShowTransfer] = useState(false)
   const [trFrom, setTrFrom] = useState('')
   const [trTo, setTrTo] = useState('')
@@ -938,6 +928,11 @@ function ContasScreen({ uid }: { uid: string }) {
     setTimeout(() => { setTrMsg(''); setShowTransfer(false) }, 2000); load()
   }
 
+  const deleteTransfer = async (id: string) => {
+    await deleteDoc(doc(db,'users',uid,'transfers',id))
+    load()
+  }
+
   const prevEntries = entries.filter(e => e.month===pmk)
   const prevMap: Record<string,number> = {}
   prevEntries.forEach(e => { prevMap[e.account]=e.balance })
@@ -959,6 +954,8 @@ function ContasScreen({ uid }: { uid: string }) {
     acc[cfg.type].push(cfg)
     return acc
   }, {} as Record<AccountType, AccountConfig[]>)
+
+  const monthTransfers = transfers.filter(t => t.month === selectedMonth).sort((a, b) => b.createdAt - a.createdAt)
 
   return (
     <div style={S.screen}>
@@ -1040,10 +1037,12 @@ function ContasScreen({ uid }: { uid: string }) {
             </div>
           )}
 
-          {/* Transferência entre contas */}
+          {/* Botão de transferência */}
           <button onClick={() => setShowTransfer(!showTransfer)} style={{ ...S.btnGhost, marginTop:0, marginBottom:10, fontSize:12 }}>
             {showTransfer ? 'Cancelar transferencia' : '+ Registrar transferencia entre contas'}
           </button>
+
+          {/* Formulário de transferência */}
           {showTransfer && (
             <div style={{ ...S.card, marginBottom:12 }}>
               <div style={{ ...S.label, marginBottom:10 }}>Transferencia</div>
@@ -1063,6 +1062,48 @@ function ContasScreen({ uid }: { uid: string }) {
               <input style={{ ...S.input, marginBottom:0 }} placeholder="Ex: Aporte renda fixa..." value={trDesc} onChange={e => setTrDesc(e.target.value)} />
               {trMsg && <div style={{ textAlign:'center', color:'#00E5A0', fontSize:12, margin:'8px 0' }}>{trMsg}</div>}
               <button style={{ ...S.btn, marginTop:12 }} onClick={addTransfer}>Registrar transferencia</button>
+            </div>
+          )}
+
+          {/* ─── HISTÓRICO DE TRANSFERÊNCIAS ─── */}
+          {monthTransfers.length > 0 && (
+            <div style={{ ...S.card, marginBottom:12 }}>
+              <div style={{ ...S.label, marginBottom:12 }}>Transferencias de {monthLabel(selectedMonth)}</div>
+              {monthTransfers.map((t, idx) => {
+                const fromType = configs.find(c => c.name === t.fromAccount)?.type ?? 'cash'
+                const toType   = configs.find(c => c.name === t.toAccount)?.type ?? 'cash'
+                const isLast   = idx === monthTransfers.length - 1
+                return (
+                  <div key={t.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 0', borderBottom: isLast ? 'none' : '0.5px solid rgba(255,255,255,0.05)' }}>
+                    {/* Indicador visual from → to */}
+                    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:2, flexShrink:0 }}>
+                      <div style={{ width:8, height:8, borderRadius:'50%', background:ACCOUNT_TYPE_COLORS[fromType] }} />
+                      <div style={{ width:1, height:20, background:'rgba(255,255,255,0.08)' }} />
+                      <div style={{ width:8, height:8, borderRadius:'50%', background:ACCOUNT_TYPE_COLORS[toType] }} />
+                    </div>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:13, fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                        {t.fromAccount} → {t.toAccount}
+                      </div>
+                      <div style={{ fontSize:10, color:'rgba(255,255,255,0.35)', marginTop:2 }}>{t.description}</div>
+                    </div>
+                    <div style={{ textAlign:'right', flexShrink:0 }}>
+                      <div style={{ fontSize:13, fontWeight:500, color:'#00E5A0' }}>{fmt(t.amount)}</div>
+                      <button
+                        onClick={() => deleteTransfer(t.id)}
+                        style={{ background:'none', border:'none', color:'rgba(255,255,255,0.2)', cursor:'pointer', fontSize:16, padding:'0 2px' }}>x</button>
+                    </div>
+                  </div>
+                )
+              })}
+              <div style={{ borderTop:'0.5px solid rgba(255,255,255,0.08)', paddingTop:10, marginTop:4, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                <div style={{ ...S.muted, fontFamily:"'DM Mono',monospace" }}>
+                  {monthTransfers.length} transferencia{monthTransfers.length !== 1 ? 's' : ''}
+                </div>
+                <div style={{ fontSize:13, fontWeight:500 }}>
+                  {fmt(monthTransfers.reduce((s, t) => s + t.amount, 0))}
+                </div>
+              </div>
             </div>
           )}
 
