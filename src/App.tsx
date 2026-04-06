@@ -451,8 +451,6 @@ function PainelScreen({ uid }: { uid: string }) {
   })
 
   const totalReceita = thisMonthTxs.filter(t => t.type==='income').reduce((s,t) => s+t.value, 0)
-  const evolucaoPatrimonio = patrimonio - patrimonioPrev
-  const saldo = totalReceita - (evolucaoPatrimonio - rendimento)
 
   const patrimonio = calcPatrimonio(entries, mk, configs)
   const patrimonioPrev = calcPatrimonio(entries, pmk, configs)
@@ -464,6 +462,9 @@ function PainelScreen({ uid }: { uid: string }) {
   const rendimentoPct = investimentosPrev > 0 ? (rendimento / investimentosPrev) * 100 : 0
   const varPatrimonio = patrimonioPrev > 0 ? ((patrimonio - patrimonioPrev) / patrimonioPrev) * 100 : 0
   const meta10pct = investimentosPrev * (10 / 12 / 100)
+
+  const evolucaoPatrimonio = patrimonio - patrimonioPrev
+  const saldo = totalReceita - (evolucaoPatrimonio - rendimento)
 
   const allMonths = [...new Set(entries.map(e => e.month))].sort().slice(-6)
   const chartData = allMonths.map(m => ({
