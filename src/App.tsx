@@ -486,7 +486,7 @@ function PainelScreen({ uid }: { uid: string }) {
         <div style={{ fontSize:30, fontWeight:600, color:evolucaoPatrimonio>=0?'#00E5A0':'#E24B4A', letterSpacing:'-0.02em' }}>{fmt(evolucaoPatrimonio)}</div>
         <div style={{ display:'flex', gap:16, marginTop:6 }}>
           <span style={{ fontSize:12, color:'#00E5A0' }}>+{fmt(totalReceita)}</span>
-          <span style={{ fontSize:12, color:'#E24B4A' }}>-{fmt(evolucaoPatrimonio - rendimento)}</span>
+          <span style={{ fontSize:12, color:'#E24B4A' }}>-{fmt(saldo)}</span>
         </div>
       </div>
 
