@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth'
 import type { User } from 'firebase/auth'
-import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy } from 'firebase/firestore'
+import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, updateDoc } from 'firebase/firestore'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts'
 import { auth, db } from './firebase'
 
@@ -858,6 +858,132 @@ function ReceitasScreen({ uid }: { uid: string }) {
   )
 }
 
+// ─── TRANSFER HISTORY ──────────────────────────────────────────────────────
+
+function TransferHistory({ transfers, configs, selectedMonth, onDelete, onUpdate }: {
+  transfers: Transfer[]
+  configs: AccountConfig[]
+  selectedMonth: string
+  onDelete: (id: string) => void
+  onUpdate: (id: string, fields: Partial<Omit<Transfer, 'id'>>) => Promise<void>
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editFrom, setEditFrom] = useState('')
+  const [editTo, setEditTo] = useState('')
+  const [editAmt, setEditAmt] = useState('')
+  const [editDesc, setEditDesc] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const startEdit = (t: Transfer) => {
+    setEditingId(t.id)
+    setEditFrom(t.fromAccount)
+    setEditTo(t.toAccount)
+    setEditAmt(String(t.amount))
+    setEditDesc(t.description)
+  }
+
+  const cancelEdit = () => setEditingId(null)
+
+  const saveEdit = async (id: string) => {
+    const v = parseFloat(editAmt.replace(',', '.'))
+    if (!v || v <= 0 || !editFrom || !editTo || editFrom === editTo) return
+    setSaving(true)
+    await onUpdate(id, {
+      amount: v,
+      fromAccount: editFrom,
+      toAccount: editTo,
+      description: editDesc.trim() || `${editFrom} → ${editTo}`,
+    })
+    setSaving(false)
+    setEditingId(null)
+  }
+
+  return (
+    <div style={{ ...S.card, marginBottom: 12 }}>
+      <div style={{ ...S.label, marginBottom: 12 }}>Transferencias de {monthLabel(selectedMonth)}</div>
+
+      {transfers.map((t, idx) => {
+        const fromType = configs.find(c => c.name === t.fromAccount)?.type ?? 'cash'
+        const toType   = configs.find(c => c.name === t.toAccount)?.type ?? 'cash'
+        const isLast   = idx === transfers.length - 1
+        const isEditing = editingId === t.id
+
+        return (
+          <div key={t.id} style={{ borderBottom: isLast && !isEditing ? 'none' : '0.5px solid rgba(255,255,255,0.05)' }}>
+            {isEditing ? (
+              /* ── modo edição ── */
+              <div style={{ padding: '12px 0' }}>
+                <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>De</div>
+                <select style={S.select} value={editFrom} onChange={e => setEditFrom(e.target.value)}>
+                  {configs.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                </select>
+                <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Para</div>
+                <select style={S.select} value={editTo} onChange={e => setEditTo(e.target.value)}>
+                  {configs.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                </select>
+                <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Valor (R$)</div>
+                <input style={S.input} type="number" inputMode="decimal" value={editAmt} onChange={e => setEditAmt(e.target.value)} />
+                <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Descricao</div>
+                <input style={{ ...S.input, marginBottom: 0 }} value={editDesc} onChange={e => setEditDesc(e.target.value)} />
+                <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                  <button
+                    onClick={() => saveEdit(t.id)}
+                    disabled={saving}
+                    style={{ flex: 1, padding: '10px', background: '#4E9EFF', border: 'none', borderRadius: 10, color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', opacity: saving ? 0.6 : 1 }}>
+                    {saving ? 'Salvando...' : 'Salvar'}
+                  </button>
+                  <button
+                    onClick={cancelEdit}
+                    style={{ flex: 1, padding: '10px', background: 'transparent', border: '0.5px solid rgba(255,255,255,0.15)', borderRadius: 10, color: 'rgba(255,255,255,0.5)', fontSize: 13, cursor: 'pointer' }}>
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* ── modo visualização ── */
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: ACCOUNT_TYPE_COLORS[fromType] }} />
+                  <div style={{ width: 1, height: 20, background: 'rgba(255,255,255,0.08)' }} />
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: ACCOUNT_TYPE_COLORS[toType] }} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {t.fromAccount} → {t.toAccount}
+                  </div>
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginTop: 2 }}>{t.description}</div>
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: '#00E5A0' }}>{fmt(t.amount)}</div>
+                  <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', marginTop: 2 }}>
+                    <button
+                      onClick={() => startEdit(t)}
+                      style={{ background: 'none', border: 'none', color: '#4E9EFF', cursor: 'pointer', fontSize: 11, padding: '0 2px', fontFamily: "'DM Mono',monospace" }}>
+                      editar
+                    </button>
+                    <button
+                      onClick={() => onDelete(t.id)}
+                      style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.2)', cursor: 'pointer', fontSize: 16, padding: '0 2px' }}>x</button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      <div style={{ borderTop: '0.5px solid rgba(255,255,255,0.08)', paddingTop: 10, marginTop: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ ...S.muted, fontFamily: "'DM Mono',monospace" }}>
+          {transfers.length} transferencia{transfers.length !== 1 ? 's' : ''}
+        </div>
+        <div style={{ fontSize: 13, fontWeight: 500 }}>
+          {fmt(transfers.reduce((s, t) => s + t.amount, 0))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── CONTAS ────────────────────────────────────────────────────────────────
 
 function ContasScreen({ uid }: { uid: string }) {
@@ -1067,44 +1193,16 @@ function ContasScreen({ uid }: { uid: string }) {
 
           {/* ─── HISTÓRICO DE TRANSFERÊNCIAS ─── */}
           {monthTransfers.length > 0 && (
-            <div style={{ ...S.card, marginBottom:12 }}>
-              <div style={{ ...S.label, marginBottom:12 }}>Transferencias de {monthLabel(selectedMonth)}</div>
-              {monthTransfers.map((t, idx) => {
-                const fromType = configs.find(c => c.name === t.fromAccount)?.type ?? 'cash'
-                const toType   = configs.find(c => c.name === t.toAccount)?.type ?? 'cash'
-                const isLast   = idx === monthTransfers.length - 1
-                return (
-                  <div key={t.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 0', borderBottom: isLast ? 'none' : '0.5px solid rgba(255,255,255,0.05)' }}>
-                    {/* Indicador visual from → to */}
-                    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:2, flexShrink:0 }}>
-                      <div style={{ width:8, height:8, borderRadius:'50%', background:ACCOUNT_TYPE_COLORS[fromType] }} />
-                      <div style={{ width:1, height:20, background:'rgba(255,255,255,0.08)' }} />
-                      <div style={{ width:8, height:8, borderRadius:'50%', background:ACCOUNT_TYPE_COLORS[toType] }} />
-                    </div>
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ fontSize:13, fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                        {t.fromAccount} → {t.toAccount}
-                      </div>
-                      <div style={{ fontSize:10, color:'rgba(255,255,255,0.35)', marginTop:2 }}>{t.description}</div>
-                    </div>
-                    <div style={{ textAlign:'right', flexShrink:0 }}>
-                      <div style={{ fontSize:13, fontWeight:500, color:'#00E5A0' }}>{fmt(t.amount)}</div>
-                      <button
-                        onClick={() => deleteTransfer(t.id)}
-                        style={{ background:'none', border:'none', color:'rgba(255,255,255,0.2)', cursor:'pointer', fontSize:16, padding:'0 2px' }}>x</button>
-                    </div>
-                  </div>
-                )
-              })}
-              <div style={{ borderTop:'0.5px solid rgba(255,255,255,0.08)', paddingTop:10, marginTop:4, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                <div style={{ ...S.muted, fontFamily:"'DM Mono',monospace" }}>
-                  {monthTransfers.length} transferencia{monthTransfers.length !== 1 ? 's' : ''}
-                </div>
-                <div style={{ fontSize:13, fontWeight:500 }}>
-                  {fmt(monthTransfers.reduce((s, t) => s + t.amount, 0))}
-                </div>
-              </div>
-            </div>
+            <TransferHistory
+              transfers={monthTransfers}
+              configs={configs}
+              selectedMonth={selectedMonth}
+              onDelete={deleteTransfer}
+              onUpdate={async (id, fields) => {
+                await updateDoc(doc(db, 'users', uid, 'transfers', id), fields)
+                load()
+              }}
+            />
           )}
 
           {/* Saldos agrupados por tipo */}
