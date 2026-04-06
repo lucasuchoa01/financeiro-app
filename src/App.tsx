@@ -482,8 +482,8 @@ function PainelScreen({ uid }: { uid: string }) {
   return (
     <div style={S.screen}>
       <div style={{ marginBottom:16 }}>
-        <div style={S.label}>Saldo do mes</div>
-        <div style={{ fontSize:30, fontWeight:600, color:saldo>=0?'#00E5A0':'#E24B4A', letterSpacing:'-0.02em' }}>{fmt(saldo)}</div>
+        <div style={S.label}>Evolucao do mes</div>
+        <div style={{ fontSize:30, fontWeight:600, color:evolucaoPatrimonio>=0?'#00E5A0':'#E24B4A', letterSpacing:'-0.02em' }}>{fmt(evolucaoPatrimonio)}</div>
         <div style={{ display:'flex', gap:16, marginTop:6 }}>
           <span style={{ fontSize:12, color:'#00E5A0' }}>+{fmt(totalReceita)}</span>
           <span style={{ fontSize:12, color:'#E24B4A' }}>-{fmt(evolucaoPatrimonio - rendimento)}</span>
