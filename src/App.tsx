@@ -232,21 +232,6 @@ function calcRendimento(
   return invAtual - invAnterior - aportes
 }
 
-function calcAportes(
-  transfers: Transfer[],
-  month: string,
-  validAccounts: AccountConfig[]
-) {
-  const invNames = validAccounts.filter(a => a.type === 'investment').map(a => a.name)
-  return transfers
-    .filter(t => t.month === month)
-    .reduce((s, t) => {
-      if (invNames.includes(t.toAccount) && !invNames.includes(t.fromAccount)) return s + t.amount
-      if (invNames.includes(t.fromAccount) && !invNames.includes(t.toAccount)) return s - t.amount
-      return s
-    }, 0)
-}
-
 // ─── SHARED COMPONENTS ─────────────────────────────────────────────────────
 
 function CategoryInput({ value, onChange, savedCategories, placeholder }: {
@@ -927,6 +912,7 @@ function TransferHistory({ transfers, configs, selectedMonth, onDelete, onUpdate
         return (
           <div key={t.id} style={{ borderBottom: isLast && !isEditing ? 'none' : '0.5px solid rgba(255,255,255,0.05)' }}>
             {isEditing ? (
+              /* ── modo edição ── */
               <div style={{ padding: '12px 0' }}>
                 <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>De</div>
                 <select style={S.select} value={editFrom} onChange={e => setEditFrom(e.target.value)}>
@@ -955,6 +941,7 @@ function TransferHistory({ transfers, configs, selectedMonth, onDelete, onUpdate
                 </div>
               </div>
             ) : (
+              /* ── modo visualização ── */
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, flexShrink: 0 }}>
                   <div style={{ width: 8, height: 8, borderRadius: '50%', background: ACCOUNT_TYPE_COLORS[fromType] }} />
@@ -1085,7 +1072,6 @@ function ContasScreen({ uid }: { uid: string }) {
   const externalAtual = calcExternal(entries, selectedMonth, configs)
   const rendimento = calcRendimento(entries, transfers, selectedMonth, pmk, configs)
   const rendPct = calcInvestimentos(entries, pmk, configs) > 0 ? (rendimento / calcInvestimentos(entries, pmk, configs)) * 100 : 0
-  const aportes = calcAportes(transfers, selectedMonth, configs)
 
   const allMonthsData = [...new Set(entries.map(e => e.month))].sort().slice(-6)
   const chartData = allMonthsData.map(m => ({ name:monthLabel(m), total:calcPatrimonio(entries,m,configs) }))
@@ -1144,49 +1130,15 @@ function ContasScreen({ uid }: { uid: string }) {
         </div>
       ) : (
         <>
-          {/* Resumo — Patrimônio */}
-          <div style={{ marginBottom:8 }}>
-            <MetricCard
-              label="Patrimonio"
-              value={fmt(totalAtual)}
-              sub={`${diff >= 0 ? '+' : ''}${fmt(diff)} vs anterior`}
-              subColor={diff >= 0 ? '#00E5A0' : '#E24B4A'}
-            />
+          {/* Resumo */}
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:10 }}>
+            <MetricCard label="Patrimonio" value={fmt(totalAtual)} sub={`${diff>=0?'+':''}${fmt(diff)} vs anterior`} subColor={diff>=0?'#00E5A0':'#E24B4A'} />
+            <MetricCard label="Rendimento" value={fmt(rendimento)} sub={fmtPct(rendPct)} subColor={rendimento>=0?'#00E5A0':'#E24B4A'} accent="#00E5A0" />
           </div>
-
-          {/* Card de investimentos expandido com breakdown */}
-          <div style={{ background:'#13141A', border:'0.5px solid rgba(0,229,160,0.25)', borderRadius:14, padding:'12px 14px', marginBottom:8 }}>
-            <div style={{ fontSize:10, color:'#00E5A0', letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:10, fontFamily:"'DM Mono',monospace" }}>Investimentos</div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:8 }}>
-              <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
-                <div style={{ fontSize:9, color:'rgba(255,255,255,0.35)', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>TOTAL</div>
-                <div style={{ fontSize:13, fontWeight:600 }}>{fmt(investAtual)}</div>
-              </div>
-              <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
-                <div style={{ fontSize:9, color:'rgba(255,255,255,0.35)', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>APORTES</div>
-                <div style={{ fontSize:13, fontWeight:500, color: aportes >= 0 ? '#4E9EFF' : '#FF9F43' }}>
-                  {aportes >= 0 ? '+' : ''}{fmt(aportes)}
-                </div>
-              </div>
-              <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
-                <div style={{ fontSize:9, color:'rgba(255,255,255,0.35)', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>RENDIMENTO</div>
-                <div style={{ fontSize:13, fontWeight:500, color: rendimento >= 0 ? '#00E5A0' : '#E24B4A' }}>
-                  {rendimento >= 0 ? '+' : ''}{fmt(rendimento)}
-                </div>
-              </div>
-              <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
-                <div style={{ fontSize:9, color:'rgba(255,255,255,0.35)', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>%</div>
-                <div style={{ fontSize:13, fontWeight:500, color: rendimento >= 0 ? '#00E5A0' : '#E24B4A' }}>
-                  {fmtPct(rendPct)}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Caixa + Trading */}
-          <div style={{ display:'grid', gridTemplateColumns: configs.some(c => c.type==='external') ? '1fr 1fr' : '1fr', gap:8, marginBottom:10 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginBottom:10 }}>
             <MetricCard label="Caixa" value={fmt(caixaAtual)} accent="#4E9EFF" />
-            {configs.some(c => c.type==='external') && <MetricCard label="Trading" value={fmt(externalAtual)} accent="#FF9F43" />}
+            <MetricCard label="Invest." value={fmt(investAtual)} accent="#00E5A0" />
+            {configs.some(c=>c.type==='external') && <MetricCard label="Trading" value={fmt(externalAtual)} accent="#FF9F43" />}
           </div>
 
           {/* Gráfico */}
@@ -1240,7 +1192,7 @@ function ContasScreen({ uid }: { uid: string }) {
             </div>
           )}
 
-          {/* Histórico de transferências */}
+          {/* ─── HISTÓRICO DE TRANSFERÊNCIAS ─── */}
           {monthTransfers.length > 0 && (
             <TransferHistory
               transfers={monthTransfers}
@@ -1329,7 +1281,6 @@ function RelatorioScreen({ uid }: { uid: string }) {
   const rendimento = calcRendimento(entries,transfers,selectedMonth,pmk,configs)
   const rendPct = calcInvestimentos(entries,pmk,configs)>0 ? (rendimento/calcInvestimentos(entries,pmk,configs))*100 : 0
   const meta10 = calcInvestimentos(entries,pmk,configs)*(10/12/100)
-  const aportesMes = calcAportes(transfers, selectedMonth, configs)
 
   const catMap: Record<string,number> = {}
   mTxs.filter(t => t.type==='expense').forEach(t => { catMap[t.category]=(catMap[t.category]||0)+t.value })
@@ -1352,7 +1303,6 @@ Variacao: ${fmt(patrimonio-patrimonioPrev)}
 
 INVESTIMENTOS
 Total investido: ${fmt(investimentos)}
-Aportes no mes: ${fmt(aportesMes)}
 Rendimento real: ${fmt(rendimento)} (${fmtPct(rendPct)})
 Meta 10% a.a.: ${fmt(meta10)}
 ${rendimento>=meta10?'Acima da meta':'Abaixo da meta'}
