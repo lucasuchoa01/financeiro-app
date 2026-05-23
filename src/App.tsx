@@ -1152,7 +1152,7 @@ function TransferHistory({ transfers, configs, selectedMonth, onDelete, onUpdate
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {t.fromAccount} -> {t.toAccount}
+                    {`${t.fromAccount} -> ${t.toAccount}`}
                   </div>
                   <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginTop: 2 }}>{t.description}</div>
                 </div>
