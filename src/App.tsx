@@ -319,6 +319,7 @@ type AllocationItem = {
   short: string
   value: number
   color: string
+  target?: number
 }
 
 function getAllocationData(caixa: number, investimentos: number, external: number): AllocationItem[] {
@@ -329,10 +330,20 @@ function getAllocationData(caixa: number, investimentos: number, external: numbe
   ].filter(item => item.value > 0)
 }
 
-function AllocationCard({ caixa, investimentos, external, compact=false }: { caixa: number; investimentos: number; external: number; compact?: boolean }) {
-  const data = getAllocationData(caixa, investimentos, external)
-  const total = data.reduce((s, item) => s + item.value, 0)
-  const aporte = data.length > 0 ? [...data].sort((a,b) => (a.value/total) - (b.value/total))[0] : null
+function AllocationCard({ caixa, investimentos, external, data: customData, compact=false }: { caixa?: number; investimentos?: number; external?: number; data?: AllocationItem[]; compact?: boolean }) {
+  const rawData = customData ?? getAllocationData(caixa ?? 0, investimentos ?? 0, external ?? 0)
+  const data = rawData.filter(item => item.value > 0)
+  const total = rawData.reduce((s, item) => s + item.value, 0)
+  const aporte = total > 0
+    ? rawData
+      .filter(item => (item.target ?? 0) > 0)
+      .map(item => {
+        const pct = (item.value / total) * 100
+        return { ...item, pct, gap:(item.target ?? 0) - pct }
+      })
+      .filter(item => item.gap > 0)
+      .sort((a,b) => b.gap - a.gap)[0] ?? (data.length > 0 ? [...data].sort((a,b) => (a.value/total) - (b.value/total))[0] : null)
+    : null
 
   return (
     <div style={{ ...S.card, border:'0.5px solid rgba(78,158,255,0.18)' }}>
@@ -343,8 +354,9 @@ function AllocationCard({ caixa, investimentos, external, compact=false }: { cai
         </div>
         {aporte && (
           <div style={{ textAlign:'right', maxWidth:135 }}>
-            <div style={{ fontSize:10, color:'rgba(255,255,255,0.35)', fontFamily:"'DM Mono',monospace", textTransform:'uppercase' }}>Menor peso</div>
+            <div style={{ fontSize:10, color:'rgba(255,255,255,0.35)', fontFamily:"'DM Mono',monospace", textTransform:'uppercase' }}>{'gap' in aporte ? 'Proximo aporte' : 'Menor peso'}</div>
             <div style={{ fontSize:12, color:aporte.color, fontWeight:600 }}>{aporte.short}</div>
+            {'gap' in aporte && <div style={{ fontSize:10, color:'rgba(255,255,255,0.35)', marginTop:2 }}>Maior distancia da meta</div>}
           </div>
         )}
       </div>
@@ -377,7 +389,10 @@ function AllocationCard({ caixa, investimentos, external, compact=false }: { cai
                     <div style={{ height:6, background:'#1C1D25', borderRadius:999, overflow:'hidden' }}>
                       <div style={{ width:`${pct}%`, height:'100%', background:item.color, borderRadius:999 }} />
                     </div>
-                    <div style={{ fontSize:11, color:'rgba(255,255,255,0.38)', marginTop:3 }}>{fmt(item.value)}</div>
+                    <div style={{ display:'flex', justifyContent:'space-between', gap:8, fontSize:11, color:'rgba(255,255,255,0.38)', marginTop:3 }}>
+                      <span>{fmt(item.value)}</span>
+                      {item.target !== undefined && <span>Meta {item.target}%</span>}
+                    </div>
                   </div>
                 )
               })}
@@ -559,6 +574,42 @@ function PainelScreen({ uid }: { uid: string }) {
   const varPatrimonio = patrimonioPrev > 0 ? ((patrimonio - patrimonioPrev) / patrimonioPrev) * 100 : 0
   const meta10pct = investimentosPrev * (10 / 12 / 100)
 
+  const classifyAccount = (name: string) => {
+    const n = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+
+    if (n.includes('nubank') || n.includes('wise')) return 'cash'
+    if (n.includes('reserva')) return 'reserve'
+    if (n.includes('renda fixa') || n.includes('cdb') || n.includes('tesouro') || n.includes('selic')) return 'fixed'
+    if (n.includes('clear') || n.includes('acoes') || n.includes('fii') || n.includes('b3')) return 'variable'
+    if (n.includes('forex') || n.includes('prop') || n.includes('proprio')) return 'trading'
+
+    const cfgType = configs.find(c => c.name === name)?.type
+    if (cfgType === 'cash') return 'cash'
+    if (cfgType === 'external') return 'trading'
+    return 'fixed'
+  }
+  const allocationTotals = entries
+    .filter(e => e.month === mk)
+    .reduce((acc, entry) => {
+      const type = classifyAccount(entry.account)
+      acc[type] = (acc[type] ?? 0) + entry.balance
+      return acc
+    }, {} as Record<string, number>)
+
+  const cashTotal = allocationTotals.cash ?? 0
+  const reserveTotal = allocationTotals.reserve ?? 0
+  const fixedIncomeTotal = allocationTotals.fixed ?? 0
+  const variableTotal = allocationTotals.variable ?? 0
+  const tradingTotal = allocationTotals.trading ?? 0
+
+  const allocationData: AllocationItem[] = [
+    { key:'cash', label:'Caixa', short:'Caixa', value:cashTotal, color:'#4E9EFF', target:5 },
+    { key:'reserve', label:'Reserva', short:'Reserva', value:reserveTotal, color:'#00D1FF', target:20 },
+    { key:'fixed', label:'Renda fixa', short:'R. fixa', value:fixedIncomeTotal, color:'#00E5A0', target:20 },
+    { key:'variable', label:'Variavel', short:'Variavel', value:variableTotal, color:'#9B59FF', target:40 },
+    { key:'trading', label:'Trading', short:'Trading', value:tradingTotal, color:'#FF9F43', target:15 },
+  ]
+
   const evolucaoPatrimonio = patrimonio - patrimonioPrev
   const saldo = totalReceita - (evolucaoPatrimonio - rendimento)
 
@@ -586,8 +637,6 @@ function PainelScreen({ uid }: { uid: string }) {
         </div>
       </div>
 
-      <AllocationCard caixa={caixa} investimentos={investimentos} external={external} />
-
       <div style={S.card}>
         <div style={S.label}>Patrimonio total</div>
         <div style={{ fontSize:26, fontWeight:600, marginBottom:12 }}>{fmt(patrimonio)}</div>
@@ -614,6 +663,8 @@ function PainelScreen({ uid }: { uid: string }) {
           </div>
         </div>
       </div>
+
+      <AllocationCard data={allocationData} />
 
       {investimentosPrev > 0 && (
         <div style={{ ...S.card, border:'0.5px solid rgba(0,229,160,0.2)' }}>
@@ -1562,4 +1613,8 @@ export default function App() {
     </div>
   )
 }
+
+
+
+
 
