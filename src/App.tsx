@@ -330,6 +330,49 @@ function getAllocationData(caixa: number, investimentos: number, external: numbe
   ].filter(item => item.value > 0)
 }
 
+type AccountClass = 'cash' | 'reserve' | 'fixed' | 'variable' | 'trading'
+
+const ACCOUNT_CLASS_LABELS: Record<AccountClass, string> = {
+  cash: 'Caixa',
+  reserve: 'Reserva',
+  fixed: 'Renda fixa',
+  variable: 'Variavel',
+  trading: 'Trading',
+}
+
+function classifyAccount(name: string, configs: AccountConfig[]): AccountClass {
+  const n = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+
+  if (n.includes('nubank') || n.includes('wise')) return 'cash'
+  if (n.includes('reserva')) return 'reserve'
+  if (n.includes('renda fixa') || n.includes('cdb') || n.includes('tesouro') || n.includes('selic')) return 'fixed'
+  if (n.includes('clear') || n.includes('acoes') || n.includes('fii') || n.includes('b3')) return 'variable'
+  if (n.includes('forex') || n.includes('prop') || n.includes('proprio')) return 'trading'
+
+  const cfgType = configs.find(c => c.name === name)?.type
+  if (cfgType === 'cash') return 'cash'
+  if (cfgType === 'external') return 'trading'
+  return 'fixed'
+}
+
+function buildAllocationData(entries: AccountEntry[], month: string, configs: AccountConfig[]): AllocationItem[] {
+  const totals = entries
+    .filter(e => e.month === month)
+    .reduce((acc, entry) => {
+      const type = classifyAccount(entry.account, configs)
+      acc[type] = (acc[type] ?? 0) + entry.balance
+      return acc
+    }, {} as Record<AccountClass, number>)
+
+  return [
+    { key:'cash', label:'Caixa', short:'Caixa', value:totals.cash ?? 0, color:'#4E9EFF', target:5 },
+    { key:'reserve', label:'Reserva', short:'Reserva', value:totals.reserve ?? 0, color:'#00D1FF', target:20 },
+    { key:'fixed', label:'Renda fixa', short:'R. fixa', value:totals.fixed ?? 0, color:'#00E5A0', target:20 },
+    { key:'variable', label:'Variavel', short:'Variavel', value:totals.variable ?? 0, color:'#9B59FF', target:40 },
+    { key:'trading', label:'Trading', short:'Trading', value:totals.trading ?? 0, color:'#FF9F43', target:15 },
+  ]
+}
+
 function AllocationCard({ caixa, investimentos, external, data: customData, compact=false }: { caixa?: number; investimentos?: number; external?: number; data?: AllocationItem[]; compact?: boolean }) {
   const rawData = customData ?? getAllocationData(caixa ?? 0, investimentos ?? 0, external ?? 0)
   const data = rawData.filter(item => item.value > 0)
@@ -574,41 +617,7 @@ function PainelScreen({ uid }: { uid: string }) {
   const varPatrimonio = patrimonioPrev > 0 ? ((patrimonio - patrimonioPrev) / patrimonioPrev) * 100 : 0
   const meta10pct = investimentosPrev * (10 / 12 / 100)
 
-  const classifyAccount = (name: string) => {
-    const n = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-
-    if (n.includes('nubank') || n.includes('wise')) return 'cash'
-    if (n.includes('reserva')) return 'reserve'
-    if (n.includes('renda fixa') || n.includes('cdb') || n.includes('tesouro') || n.includes('selic')) return 'fixed'
-    if (n.includes('clear') || n.includes('acoes') || n.includes('fii') || n.includes('b3')) return 'variable'
-    if (n.includes('forex') || n.includes('prop') || n.includes('proprio')) return 'trading'
-
-    const cfgType = configs.find(c => c.name === name)?.type
-    if (cfgType === 'cash') return 'cash'
-    if (cfgType === 'external') return 'trading'
-    return 'fixed'
-  }
-  const allocationTotals = entries
-    .filter(e => e.month === mk)
-    .reduce((acc, entry) => {
-      const type = classifyAccount(entry.account)
-      acc[type] = (acc[type] ?? 0) + entry.balance
-      return acc
-    }, {} as Record<string, number>)
-
-  const cashTotal = allocationTotals.cash ?? 0
-  const reserveTotal = allocationTotals.reserve ?? 0
-  const fixedIncomeTotal = allocationTotals.fixed ?? 0
-  const variableTotal = allocationTotals.variable ?? 0
-  const tradingTotal = allocationTotals.trading ?? 0
-
-  const allocationData: AllocationItem[] = [
-    { key:'cash', label:'Caixa', short:'Caixa', value:cashTotal, color:'#4E9EFF', target:5 },
-    { key:'reserve', label:'Reserva', short:'Reserva', value:reserveTotal, color:'#00D1FF', target:20 },
-    { key:'fixed', label:'Renda fixa', short:'R. fixa', value:fixedIncomeTotal, color:'#00E5A0', target:20 },
-    { key:'variable', label:'Variavel', short:'Variavel', value:variableTotal, color:'#9B59FF', target:40 },
-    { key:'trading', label:'Trading', short:'Trading', value:tradingTotal, color:'#FF9F43', target:15 },
-  ]
+  const allocationData = buildAllocationData(entries, mk, configs)
 
   const evolucaoPatrimonio = patrimonio - patrimonioPrev
   const saldo = totalReceita - (evolucaoPatrimonio - rendimento)
@@ -1214,12 +1223,14 @@ function ContasScreen({ uid }: { uid: string }) {
   const totalAtual = calcPatrimonio(entries, selectedMonth, configs)
   const totalPrev = calcPatrimonio(prevEntries, pmk, configs)
   const diff = totalAtual - totalPrev
-  const investAtual = calcInvestimentos(entries, selectedMonth, configs)
-  const caixaAtual = calcCaixa(entries, selectedMonth, configs)
-  const externalAtual = calcExternal(entries, selectedMonth, configs)
   const rendimento = calcRendimento(entries, transfers, selectedMonth, pmk, configs)
   const rendPct = calcInvestimentos(entries, pmk, configs) > 0 ? (rendimento / calcInvestimentos(entries, pmk, configs)) * 100 : 0
   const aportes = calcAportes(transfers, selectedMonth, configs)
+  const allocationData = buildAllocationData(entries, selectedMonth, configs)
+  const reserveAtual = allocationData.find(item => item.key === 'reserve')?.value ?? 0
+  const fixedIncomeAtual = allocationData.find(item => item.key === 'fixed')?.value ?? 0
+  const variableAtual = allocationData.find(item => item.key === 'variable')?.value ?? 0
+  const tradingAtual = allocationData.find(item => item.key === 'trading')?.value ?? 0
 
   const allMonthsData = [...new Set(entries.map(e => e.month))].sort().slice(-6)
   const chartData = allMonthsData.map(m => ({ name:monthLabel(m), total:calcPatrimonio(entries,m,configs) }))
@@ -1288,36 +1299,43 @@ function ContasScreen({ uid }: { uid: string }) {
             />
           </div>
 
-          {/* Card de investimentos expandido com breakdown */}
           <div style={{ background:'#13141A', border:'0.5px solid rgba(0,229,160,0.25)', borderRadius:14, padding:'12px 14px', marginBottom:8 }}>
             <div style={{ fontSize:10, color:'#00E5A0', letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:10, fontFamily:"'DM Mono',monospace" }}>Investimentos</div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:8 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
               <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
-                <div style={{ fontSize:9, color:'rgba(255,255,255,0.35)', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>TOTAL</div>
-                <div style={{ fontSize:13, fontWeight:600 }}>{fmt(investAtual)}</div>
+                <div style={{ fontSize:9, color:'#00D1FF', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>RESERVA</div>
+                <div style={{ fontSize:13, fontWeight:600 }}>{fmt(reserveAtual)}</div>
               </div>
               <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
+                <div style={{ fontSize:9, color:'#00E5A0', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>RENDA FIXA</div>
+                <div style={{ fontSize:13, fontWeight:600 }}>{fmt(fixedIncomeAtual)}</div>
+              </div>
+              <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
+                <div style={{ fontSize:9, color:'#9B59FF', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>VARIAVEL</div>
+                <div style={{ fontSize:13, fontWeight:600 }}>{fmt(variableAtual)}</div>
+              </div>
+              <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
+                <div style={{ fontSize:9, color:'#FF9F43', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>TRADING</div>
+                <div style={{ fontSize:13, fontWeight:600 }}>{fmt(tradingAtual)}</div>
+              </div>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginTop:8 }}>
+              <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
                 <div style={{ fontSize:9, color:'rgba(255,255,255,0.35)', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>APORTES</div>
-                <div style={{ fontSize:13, fontWeight:500, color: aportes >= 0 ? '#4E9EFF' : '#FF9F43' }}>
-                  {aportes >= 0 ? '+' : ''}{fmt(aportes)}
-                </div>
+                <div style={{ fontSize:13, fontWeight:500, color: aportes >= 0 ? '#4E9EFF' : '#FF9F43' }}>{aportes >= 0 ? '+' : ''}{fmt(aportes)}</div>
               </div>
               <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
                 <div style={{ fontSize:9, color:'rgba(255,255,255,0.35)', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>RENDIMENTO</div>
-                <div style={{ fontSize:13, fontWeight:500, color: rendimento >= 0 ? '#00E5A0' : '#E24B4A' }}>
-                  {rendimento >= 0 ? '+' : ''}{fmt(rendimento)}
-                </div>
+                <div style={{ fontSize:13, fontWeight:500, color: rendimento >= 0 ? '#00E5A0' : '#E24B4A' }}>{rendimento >= 0 ? '+' : ''}{fmt(rendimento)}</div>
               </div>
               <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
                 <div style={{ fontSize:9, color:'rgba(255,255,255,0.35)', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>%</div>
-                <div style={{ fontSize:13, fontWeight:500, color: rendimento >= 0 ? '#00E5A0' : '#E24B4A' }}>
-                  {fmtPct(rendPct)}
-                </div>
+                <div style={{ fontSize:13, fontWeight:500, color: rendimento >= 0 ? '#00E5A0' : '#E24B4A' }}>{fmtPct(rendPct)}</div>
               </div>
             </div>
           </div>
 
-          <AllocationCard caixa={caixaAtual} investimentos={investAtual} external={externalAtual} compact />
+          <AllocationCard data={allocationData} compact />
 
           {/* GrÃ¡fico */}
           {chartData.length>1 && (
@@ -1456,10 +1474,8 @@ function RelatorioScreen({ uid }: { uid: string }) {
   const patrimonio = calcPatrimonio(entries,selectedMonth,configs)
   const patrimonioPrev = calcPatrimonio(entries,pmk,configs)
   const investimentos = calcInvestimentos(entries,selectedMonth,configs)
-  const caixa = calcCaixa(entries,selectedMonth,configs)
-  const external = calcExternal(entries,selectedMonth,configs)
-  const totalAlocado = caixa + investimentos + external
-  const allocationData = getAllocationData(caixa, investimentos, external)
+  const allocationData = buildAllocationData(entries, selectedMonth, configs)
+  const totalAlocado = allocationData.reduce((s, item) => s + item.value, 0)
   const rendimento = calcRendimento(entries,transfers,selectedMonth,pmk,configs)
   const rendPct = calcInvestimentos(entries,pmk,configs)>0 ? (rendimento/calcInvestimentos(entries,pmk,configs))*100 : 0
   const meta10 = calcInvestimentos(entries,pmk,configs)*(10/12/100)
@@ -1485,9 +1501,7 @@ Anterior: ${fmt(patrimonioPrev)}
 Variacao: ${fmt(patrimonio-patrimonioPrev)}
 
 ALOCACAO
-Caixa: ${fmt(caixa)}${totalAlocado>0?` (${((caixa/totalAlocado)*100).toFixed(1)}%)`:''}
-Renda fixa / investimentos: ${fmt(investimentos)}${totalAlocado>0?` (${((investimentos/totalAlocado)*100).toFixed(1)}%)`:''}
-Renda variavel / trading: ${fmt(external)}${totalAlocado>0?` (${((external/totalAlocado)*100).toFixed(1)}%)`:''}
+${allocationData.map(item => `${item.label}: ${fmt(item.value)}${totalAlocado>0?` (${((item.value/totalAlocado)*100).toFixed(1)}%)`:''} | meta ${item.target}%`).join('\n')}
 
 INVESTIMENTOS
 Total investido: ${fmt(investimentos)}
@@ -1498,8 +1512,8 @@ ${rendimento>=meta10?'Acima da meta':'Abaixo da meta'}
 
 SALDOS POR CONTA
 ${entries.filter(e => e.month===selectedMonth && configs.some(c => c.name===e.account)).map(e => {
-  const type = configs.find(c => c.name===e.account)?.type||'cash'
-  return `- ${e.account} [${ACCOUNT_TYPE_LABELS[type]}]: ${fmt(e.balance)}`
+  const accountClass = classifyAccount(e.account, configs)
+  return `- ${e.account} [${ACCOUNT_CLASS_LABELS[accountClass]}]: ${fmt(e.balance)}`
 }).join('\n')}
 
 ${mTransfers.length>0?`TRANSFERENCIAS REGISTRADAS
@@ -1529,9 +1543,9 @@ ${mTxs.map(t => `${t.type==='income'?'+':'-'} ${fmt(t.value)} | ${t.description}
         <MetricCard label="Receitas" value={fmt(totalReceita)} accent="#00E5A0" />
         <MetricCard label="Gastos" value={fmt(totalGasto)} accent="#E24B4A" />
       </div>
-      <AllocationCard caixa={caixa} investimentos={investimentos} external={external} compact />
+      <AllocationCard data={allocationData} compact />
 
-      {allocationData.length > 0 && (
+      {totalAlocado > 0 && (
         <div style={{ ...S.card, marginBottom:10 }}>
           <div style={{ ...S.label, marginBottom:10 }}>Leitura rapida</div>
           {allocationData.map(item => {
@@ -1613,6 +1627,9 @@ export default function App() {
     </div>
   )
 }
+
+
+
 
 
 
