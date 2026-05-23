@@ -340,6 +340,14 @@ const ACCOUNT_CLASS_LABELS: Record<AccountClass, string> = {
   trading: 'Trading',
 }
 
+const DEFAULT_ALLOCATION_TARGETS: Record<AccountClass, number> = {
+  cash: 0,
+  reserve: 20,
+  fixed: 20,
+  variable: 40,
+  trading: 15,
+}
+
 function classifyAccount(name: string, configs: AccountConfig[]): AccountClass {
   const n = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
 
@@ -355,7 +363,7 @@ function classifyAccount(name: string, configs: AccountConfig[]): AccountClass {
   return 'fixed'
 }
 
-function buildAllocationData(entries: AccountEntry[], month: string, configs: AccountConfig[]): AllocationItem[] {
+function buildAllocationData(entries: AccountEntry[], month: string, configs: AccountConfig[], targets: Record<AccountClass, number> = DEFAULT_ALLOCATION_TARGETS): AllocationItem[] {
   const totals = entries
     .filter(e => e.month === month)
     .reduce((acc, entry) => {
@@ -365,15 +373,15 @@ function buildAllocationData(entries: AccountEntry[], month: string, configs: Ac
     }, {} as Record<AccountClass, number>)
 
   return [
-    { key:'cash', label:'Caixa', short:'Caixa', value:totals.cash ?? 0, color:'#4E9EFF', target:5 },
-    { key:'reserve', label:'Reserva', short:'Reserva', value:totals.reserve ?? 0, color:'#00D1FF', target:20 },
-    { key:'fixed', label:'Renda fixa', short:'R. fixa', value:totals.fixed ?? 0, color:'#00E5A0', target:20 },
-    { key:'variable', label:'Variavel', short:'Variavel', value:totals.variable ?? 0, color:'#9B59FF', target:40 },
-    { key:'trading', label:'Trading', short:'Trading', value:totals.trading ?? 0, color:'#FF9F43', target:15 },
+    { key:'cash', label:'Caixa', short:'Caixa', value:totals.cash ?? 0, color:'#4E9EFF' },
+    { key:'reserve', label:'Reserva', short:'Reserva', value:totals.reserve ?? 0, color:'#00D1FF', target:targets.reserve },
+    { key:'fixed', label:'Renda fixa', short:'R. fixa', value:totals.fixed ?? 0, color:'#00E5A0', target:targets.fixed },
+    { key:'variable', label:'Variavel', short:'Variavel', value:totals.variable ?? 0, color:'#9B59FF', target:targets.variable },
+    { key:'trading', label:'Trading', short:'Trading', value:totals.trading ?? 0, color:'#FF9F43', target:targets.trading },
   ]
 }
 
-function AllocationCard({ caixa, investimentos, external, data: customData, compact=false }: { caixa?: number; investimentos?: number; external?: number; data?: AllocationItem[]; compact?: boolean }) {
+function AllocationCard({ caixa, investimentos, external, data: customData, compact=false, editableTargets=false, onTargetChange }: { caixa?: number; investimentos?: number; external?: number; data?: AllocationItem[]; compact?: boolean; editableTargets?: boolean; onTargetChange?: (key: AccountClass, target: number) => void }) {
   const rawData = customData ?? getAllocationData(caixa ?? 0, investimentos ?? 0, external ?? 0)
   const data = rawData.filter(item => item.value > 0)
   const total = rawData.reduce((s, item) => s + item.value, 0)
@@ -434,7 +442,21 @@ function AllocationCard({ caixa, investimentos, external, data: customData, comp
                     </div>
                     <div style={{ display:'flex', justifyContent:'space-between', gap:8, fontSize:11, color:'rgba(255,255,255,0.38)', marginTop:3 }}>
                       <span>{fmt(item.value)}</span>
-                      {item.target !== undefined && <span>Meta {item.target}%</span>}
+                      {item.target !== undefined && (
+                        editableTargets && onTargetChange && item.key !== 'cash'
+                          ? <label style={{ display:'flex', alignItems:'center', gap:4 }}>
+                              Meta
+                              <input
+                                type="number"
+                                min="0"
+                                max="100"
+                                value={item.target}
+                                onChange={e => onTargetChange(item.key as AccountClass, Math.max(0, Math.min(100, Number(e.target.value)||0)))}
+                                style={{ width:42, background:'transparent', border:'0.5px solid rgba(255,255,255,0.12)', borderRadius:6, color:'rgba(255,255,255,0.65)', fontSize:10, padding:'2px 4px', textAlign:'right' }}
+                              />%
+                            </label>
+                          : <span>Meta {item.target}%</span>
+                      )}
                     </div>
                   </div>
                 )
@@ -442,7 +464,7 @@ function AllocationCard({ caixa, investimentos, external, data: customData, comp
             </div>
           </div>
           <div style={{ marginTop:12, padding:'10px 12px', background:'#1C1D25', borderRadius:10, color:'rgba(255,255,255,0.58)', fontSize:12, lineHeight:1.35 }}>
-            Atualize os saldos uma vez por mes e use este mapa para comparar com sua meta pessoal antes de aportar.
+            Ajuste as metas e compare a distancia de cada classe antes de aportar.
           </div>
         </>
       ) : (
@@ -608,26 +630,44 @@ function PainelScreen({ uid }: { uid: string }) {
 
   const patrimonio = calcPatrimonio(entries, mk, configs)
   const patrimonioPrev = calcPatrimonio(entries, pmk, configs)
-  const investimentos = calcInvestimentos(entries, mk, configs)
   const investimentosPrev = calcInvestimentos(entries, pmk, configs)
-  const caixa = calcCaixa(entries, mk, configs)
-  const external = calcExternal(entries, mk, configs)
   const rendimento = calcRendimento(entries, transfers, mk, pmk, configs)
   const rendimentoPct = investimentosPrev > 0 ? (rendimento / investimentosPrev) * 100 : 0
   const varPatrimonio = patrimonioPrev > 0 ? ((patrimonio - patrimonioPrev) / patrimonioPrev) * 100 : 0
   const meta10pct = investimentosPrev * (10 / 12 / 100)
 
-  const allocationData = buildAllocationData(entries, mk, configs)
+  const [allocationTargets, setAllocationTargets] = useState<Record<AccountClass, number>>(() => {
+    try {
+      const saved = localStorage.getItem('financeAllocationTargets')
+      return saved ? { ...DEFAULT_ALLOCATION_TARGETS, ...JSON.parse(saved) } : DEFAULT_ALLOCATION_TARGETS
+    } catch {
+      return DEFAULT_ALLOCATION_TARGETS
+    }
+  })
+
+  const updateAllocationTarget = (key: AccountClass, target: number) => {
+    if (key === 'cash') return
+    const next = { ...allocationTargets, [key]: target }
+    setAllocationTargets(next)
+    localStorage.setItem('financeAllocationTargets', JSON.stringify(next))
+  }
+
+  const allocationData = buildAllocationData(entries, mk, configs, allocationTargets)
 
   const evolucaoPatrimonio = patrimonio - patrimonioPrev
   const saldo = totalReceita - (evolucaoPatrimonio - rendimento)
 
   const allMonths = [...new Set(entries.map(e => e.month))].sort().slice(-6)
-  const chartData = allMonths.map(m => ({
-    name: monthLabel(m),
-    patrimonio: calcPatrimonio(entries, m, configs),
-    investimentos: calcInvestimentos(entries, m, configs),
-  }))
+  const chartData = allMonths.map(m => {
+    const prev = prevMonthKey(m)
+    const patrimonioMes = calcPatrimonio(entries, m, configs)
+    return {
+      name: monthLabel(m),
+      patrimonio: patrimonioMes,
+      investimentos: calcInvestimentos(entries, m, configs),
+      variacao: patrimonioMes - calcPatrimonio(entries, prev, configs),
+    }
+  })
 
   const catMap: Record<string,number> = {}
   thisMonthTxs.filter(t => t.type==='expense').forEach(t => { catMap[t.category]=(catMap[t.category]||0)+t.value })
@@ -649,31 +689,28 @@ function PainelScreen({ uid }: { uid: string }) {
       <div style={S.card}>
         <div style={S.label}>Patrimonio total</div>
         <div style={{ fontSize:26, fontWeight:600, marginBottom:12 }}>{fmt(patrimonio)}</div>
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
           <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
-            <div style={{ fontSize:10, color:'#4E9EFF', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>CAIXA</div>
-            <div style={{ fontSize:14, fontWeight:500 }}>{fmt(caixa)}</div>
+            <div style={{ fontSize:10, color:'#4E9EFF', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>EVOLUCAO DO MES</div>
+            <div style={{ fontSize:14, fontWeight:600, color:evolucaoPatrimonio>=0?'#00E5A0':'#E24B4A' }}>{fmt(evolucaoPatrimonio)}</div>
           </div>
           <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
-            <div style={{ fontSize:10, color:'#00E5A0', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>INVEST.</div>
-            <div style={{ fontSize:14, fontWeight:500 }}>{fmt(investimentos)}</div>
+            <div style={{ fontSize:10, color:'#00E5A0', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>RECEITA</div>
+            <div style={{ fontSize:14, fontWeight:600 }}>{fmt(totalReceita)}</div>
           </div>
-          {external > 0 && (
-            <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
-              <div style={{ fontSize:10, color:'#FF9F43', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>TRADING</div>
-              <div style={{ fontSize:14, fontWeight:500 }}>{fmt(external)}</div>
-            </div>
-          )}
-        </div>
-        <div style={{ display:'flex', gap:8, marginTop:8 }}>
-          <div style={{ flex:1, background:'#1C1D25', borderRadius:10, padding:10 }}>
-            <div style={S.muted}>Variacao patrimonio</div>
-            <div style={{ fontSize:13, fontWeight:500, color:varPatrimonio>=0?'#00E5A0':'#E24B4A', marginTop:2 }}>{fmtPct(varPatrimonio)}</div>
+          <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
+            <div style={{ fontSize:10, color:'#E24B4A', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>DESPESA</div>
+            <div style={{ fontSize:14, fontWeight:600 }}>{fmt(saldo)}</div>
+          </div>
+          <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
+            <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>VARIACAO</div>
+            <div style={{ fontSize:14, fontWeight:600, color:varPatrimonio>=0?'#00E5A0':'#E24B4A' }}>{fmtPct(varPatrimonio)}</div>
           </div>
         </div>
+
       </div>
 
-      <AllocationCard data={allocationData} />
+      <AllocationCard data={allocationData} editableTargets onTargetChange={updateAllocationTarget} />
 
       {investimentosPrev > 0 && (
         <div style={{ ...S.card, border:'0.5px solid rgba(0,229,160,0.2)' }}>
@@ -698,7 +735,7 @@ function PainelScreen({ uid }: { uid: string }) {
       {chartData.length > 1 && (
         <div style={S.card}>
           <div style={S.label}>Evolucao</div>
-          <div style={{ height:140, marginTop:10 }}>
+          <div style={{ height:190, marginTop:10 }}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData}>
                 <defs>
@@ -711,8 +748,8 @@ function PainelScreen({ uid }: { uid: string }) {
                     <stop offset="95%" stopColor="#00E5A0" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)',fontSize:10 }} axisLine={false} tickLine={false} />
-                <YAxis hide />
+                <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.42)',fontSize:10 }} axisLine={false} tickLine={false} />
+                <YAxis width={68} tick={{ fill:'rgba(255,255,255,0.35)',fontSize:10 }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${Math.round(v/1000)}k`} />
                 <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v)]} />
                 <Area type="monotone" dataKey="patrimonio" name="Patrimonio" stroke="#4E9EFF" strokeWidth={2} fill="url(#gP)" />
                 <Area type="monotone" dataKey="investimentos" name="Investimentos" stroke="#00E5A0" strokeWidth={1.5} fill="url(#gI)" strokeDasharray="4 2" />
@@ -720,8 +757,17 @@ function PainelScreen({ uid }: { uid: string }) {
             </ResponsiveContainer>
           </div>
           <div style={{ display:'flex', gap:16, marginTop:4 }}>
-            <span style={{ fontSize:10, color:'#4E9EFF' }}>â€” PatrimÃ´nio</span>
-            <span style={{ fontSize:10, color:'#00E5A0' }}>-- Investimentos</span>
+            <span style={{ fontSize:10, color:'#4E9EFF' }}>Patrimonio</span>
+            <span style={{ fontSize:10, color:'#00E5A0' }}>Investimentos</span>
+          </div>
+          <div style={{ display:'grid', gap:6, marginTop:12 }}>
+            {chartData.map(row => (
+              <div key={row.name} style={{ display:'grid', gridTemplateColumns:'48px 1fr auto', gap:8, alignItems:'center', fontSize:11, color:'rgba(255,255,255,0.55)' }}>
+                <span>{row.name}</span>
+                <span>{fmt(row.patrimonio)}</span>
+                <span style={{ color:row.variacao>=0?'#00E5A0':'#E24B4A', fontWeight:600 }}>{row.variacao>=0?'+':''}{fmt(row.variacao)}</span>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -1051,7 +1097,7 @@ function TransferHistory({ transfers, configs, selectedMonth, onDelete, onUpdate
       amount: v,
       fromAccount: editFrom,
       toAccount: editTo,
-      description: editDesc.trim() || `${editFrom} â†’ ${editTo}`,
+      description: editDesc.trim() || `${editFrom} -> ${editTo}`,
     })
     setSaving(false)
     setEditingId(null)
@@ -1106,7 +1152,7 @@ function TransferHistory({ transfers, configs, selectedMonth, onDelete, onUpdate
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {t.fromAccount} â†’ {t.toAccount}
+                    {t.fromAccount} -> {t.toAccount}
                   </div>
                   <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginTop: 2 }}>{t.description}</div>
                 </div>
@@ -1206,7 +1252,7 @@ function ContasScreen({ uid }: { uid: string }) {
   const addTransfer = async () => {
     const v = parseFloat(trAmt.replace(',','.'))
     if (!v||v<=0||!trFrom||!trTo||trFrom===trTo) { setTrMsg('Preencha todos os campos'); return }
-    await addDoc(collection(db,'users',uid,'transfers'), { amount:v, fromAccount:trFrom, toAccount:trTo, month:selectedMonth, description:trDesc.trim()||`${trFrom} â†’ ${trTo}`, createdAt:Date.now() })
+    await addDoc(collection(db,'users',uid,'transfers'), { amount:v, fromAccount:trFrom, toAccount:trTo, month:selectedMonth, description:trDesc.trim()||`${trFrom} -> ${trTo}`, createdAt:Date.now() })
     setTrAmt(''); setTrDesc(''); setTrMsg('Transferencia registrada!')
     setTimeout(() => { setTrMsg(''); setShowTransfer(false) }, 2000); load()
   }
@@ -1226,11 +1272,7 @@ function ContasScreen({ uid }: { uid: string }) {
   const rendimento = calcRendimento(entries, transfers, selectedMonth, pmk, configs)
   const rendPct = calcInvestimentos(entries, pmk, configs) > 0 ? (rendimento / calcInvestimentos(entries, pmk, configs)) * 100 : 0
   const aportes = calcAportes(transfers, selectedMonth, configs)
-  const allocationData = buildAllocationData(entries, selectedMonth, configs)
-  const reserveAtual = allocationData.find(item => item.key === 'reserve')?.value ?? 0
-  const fixedIncomeAtual = allocationData.find(item => item.key === 'fixed')?.value ?? 0
-  const variableAtual = allocationData.find(item => item.key === 'variable')?.value ?? 0
-  const tradingAtual = allocationData.find(item => item.key === 'trading')?.value ?? 0
+
 
   const allMonthsData = [...new Set(entries.map(e => e.month))].sort().slice(-6)
   const chartData = allMonthsData.map(m => ({ name:monthLabel(m), total:calcPatrimonio(entries,m,configs) }))
@@ -1289,7 +1331,7 @@ function ContasScreen({ uid }: { uid: string }) {
         </div>
       ) : (
         <>
-          {/* Resumo â€” PatrimÃ´nio */}
+          {/* Resumo - Patrimonio */}
           <div style={{ marginBottom:8 }}>
             <MetricCard
               label="Patrimonio"
@@ -1298,44 +1340,6 @@ function ContasScreen({ uid }: { uid: string }) {
               subColor={diff >= 0 ? '#00E5A0' : '#E24B4A'}
             />
           </div>
-
-          <div style={{ background:'#13141A', border:'0.5px solid rgba(0,229,160,0.25)', borderRadius:14, padding:'12px 14px', marginBottom:8 }}>
-            <div style={{ fontSize:10, color:'#00E5A0', letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:10, fontFamily:"'DM Mono',monospace" }}>Investimentos</div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
-              <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
-                <div style={{ fontSize:9, color:'#00D1FF', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>RESERVA</div>
-                <div style={{ fontSize:13, fontWeight:600 }}>{fmt(reserveAtual)}</div>
-              </div>
-              <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
-                <div style={{ fontSize:9, color:'#00E5A0', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>RENDA FIXA</div>
-                <div style={{ fontSize:13, fontWeight:600 }}>{fmt(fixedIncomeAtual)}</div>
-              </div>
-              <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
-                <div style={{ fontSize:9, color:'#9B59FF', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>VARIAVEL</div>
-                <div style={{ fontSize:13, fontWeight:600 }}>{fmt(variableAtual)}</div>
-              </div>
-              <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
-                <div style={{ fontSize:9, color:'#FF9F43', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>TRADING</div>
-                <div style={{ fontSize:13, fontWeight:600 }}>{fmt(tradingAtual)}</div>
-              </div>
-            </div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginTop:8 }}>
-              <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
-                <div style={{ fontSize:9, color:'rgba(255,255,255,0.35)', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>APORTES</div>
-                <div style={{ fontSize:13, fontWeight:500, color: aportes >= 0 ? '#4E9EFF' : '#FF9F43' }}>{aportes >= 0 ? '+' : ''}{fmt(aportes)}</div>
-              </div>
-              <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
-                <div style={{ fontSize:9, color:'rgba(255,255,255,0.35)', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>RENDIMENTO</div>
-                <div style={{ fontSize:13, fontWeight:500, color: rendimento >= 0 ? '#00E5A0' : '#E24B4A' }}>{rendimento >= 0 ? '+' : ''}{fmt(rendimento)}</div>
-              </div>
-              <div style={{ background:'#1C1D25', borderRadius:10, padding:'8px 10px' }}>
-                <div style={{ fontSize:9, color:'rgba(255,255,255,0.35)', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>%</div>
-                <div style={{ fontSize:13, fontWeight:500, color: rendimento >= 0 ? '#00E5A0' : '#E24B4A' }}>{fmtPct(rendPct)}</div>
-              </div>
-            </div>
-          </div>
-
-          <AllocationCard data={allocationData} compact />
 
           {/* GrÃ¡fico */}
           {chartData.length>1 && (
@@ -1474,8 +1478,6 @@ function RelatorioScreen({ uid }: { uid: string }) {
   const patrimonio = calcPatrimonio(entries,selectedMonth,configs)
   const patrimonioPrev = calcPatrimonio(entries,pmk,configs)
   const investimentos = calcInvestimentos(entries,selectedMonth,configs)
-  const allocationData = buildAllocationData(entries, selectedMonth, configs)
-  const totalAlocado = allocationData.reduce((s, item) => s + item.value, 0)
   const rendimento = calcRendimento(entries,transfers,selectedMonth,pmk,configs)
   const rendPct = calcInvestimentos(entries,pmk,configs)>0 ? (rendimento/calcInvestimentos(entries,pmk,configs))*100 : 0
   const meta10 = calcInvestimentos(entries,pmk,configs)*(10/12/100)
@@ -1499,9 +1501,6 @@ PATRIMONIO (sem trading externo)
 Atual: ${fmt(patrimonio)}
 Anterior: ${fmt(patrimonioPrev)}
 Variacao: ${fmt(patrimonio-patrimonioPrev)}
-
-ALOCACAO
-${allocationData.map(item => `${item.label}: ${fmt(item.value)}${totalAlocado>0?` (${((item.value/totalAlocado)*100).toFixed(1)}%)`:''} | meta ${item.target}%`).join('\n')}
 
 INVESTIMENTOS
 Total investido: ${fmt(investimentos)}
@@ -1543,22 +1542,6 @@ ${mTxs.map(t => `${t.type==='income'?'+':'-'} ${fmt(t.value)} | ${t.description}
         <MetricCard label="Receitas" value={fmt(totalReceita)} accent="#00E5A0" />
         <MetricCard label="Gastos" value={fmt(totalGasto)} accent="#E24B4A" />
       </div>
-      <AllocationCard data={allocationData} compact />
-
-      {totalAlocado > 0 && (
-        <div style={{ ...S.card, marginBottom:10 }}>
-          <div style={{ ...S.label, marginBottom:10 }}>Leitura rapida</div>
-          {allocationData.map(item => {
-            const pct = totalAlocado > 0 ? (item.value / totalAlocado) * 100 : 0
-            return (
-              <div key={item.key} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderBottom:'0.5px solid rgba(255,255,255,0.05)' }}>
-                <span style={{ fontSize:13, color:'rgba(255,255,255,0.72)' }}>{item.label}</span>
-                <span style={{ fontSize:13, fontWeight:600, color:item.color }}>{fmt(item.value)} - {pct.toFixed(1)}%</span>
-              </div>
-            )
-          })}
-        </div>
-      )}
 
       <div style={S.card}>
         <div style={{ ...S.label, marginBottom:10 }}>Texto para IA</div>
@@ -1627,6 +1610,13 @@ export default function App() {
     </div>
   )
 }
+
+
+
+
+
+
+
 
 
 
