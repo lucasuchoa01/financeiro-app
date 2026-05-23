@@ -2,10 +2,10 @@ import { useState, useEffect, useCallback } from 'react'
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth'
 import type { User } from 'firebase/auth'
 import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, updateDoc } from 'firebase/firestore'
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts'
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts'
 import { auth, db } from './firebase'
 
-// ─── TYPES ─────────────────────────────────────────────────────────────────
+// â”€â”€â”€ TYPES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export type TxType = 'expense' | 'income'
 export type AccountType = 'cash' | 'investment' | 'external'
@@ -120,7 +120,7 @@ const S = {
   navBtn: { padding:'8px 0 6px', border:'none', background:'transparent', color:'rgba(255,255,255,0.3)', fontSize:9, fontFamily:"'DM Sans',sans-serif", cursor:'pointer', display:'flex', flexDirection:'column' as const, alignItems:'center', gap:3 },
 }
 
-// ─── HOOKS ─────────────────────────────────────────────────────────────────
+// â”€â”€â”€ HOOKS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function useAccountConfigs(uid: string) {
   const [configs, setConfigs] = useState<AccountConfig[]>([])
@@ -180,7 +180,7 @@ function useCategories(uid: string) {
   return { categories, saveCategories, addCategory }
 }
 
-// ─── HELPERS ───────────────────────────────────────────────────────────────
+// â”€â”€â”€ HELPERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function deduplicateEntries(entries: AccountEntry[]): AccountEntry[] {
   const seen = new Set<string>()
@@ -247,7 +247,7 @@ function calcAportes(
     }, 0)
 }
 
-// ─── SHARED COMPONENTS ─────────────────────────────────────────────────────
+// â”€â”€â”€ SHARED COMPONENTS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function CategoryInput({ value, onChange, savedCategories, placeholder }: {
   value: string
@@ -309,6 +309,87 @@ function MetricCard({ label, value, sub, subColor, accent }: { label: string; va
       <div style={{ fontSize:10, color:accent||'rgba(255,255,255,0.4)', letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:4, fontFamily:"'DM Mono',monospace" }}>{label}</div>
       <div style={{ fontSize:18, fontWeight:600 }}>{value}</div>
       {sub && <div style={{ fontSize:11, color:subColor||'rgba(255,255,255,0.4)', marginTop:2 }}>{sub}</div>}
+    </div>
+  )
+}
+
+type AllocationItem = {
+  key: string
+  label: string
+  short: string
+  value: number
+  color: string
+}
+
+function getAllocationData(caixa: number, investimentos: number, external: number): AllocationItem[] {
+  return [
+    { key:'cash', label:'Caixa', short:'Caixa', value:caixa, color:ACCOUNT_TYPE_COLORS.cash },
+    { key:'investment', label:'Renda fixa / invest.', short:'R. fixa', value:investimentos, color:ACCOUNT_TYPE_COLORS.investment },
+    { key:'external', label:'Renda variavel / trading', short:'Variavel', value:external, color:ACCOUNT_TYPE_COLORS.external },
+  ].filter(item => item.value > 0)
+}
+
+function AllocationCard({ caixa, investimentos, external, compact=false }: { caixa: number; investimentos: number; external: number; compact?: boolean }) {
+  const data = getAllocationData(caixa, investimentos, external)
+  const total = data.reduce((s, item) => s + item.value, 0)
+  const aporte = data.length > 0 ? [...data].sort((a,b) => (a.value/total) - (b.value/total))[0] : null
+
+  return (
+    <div style={{ ...S.card, border:'0.5px solid rgba(78,158,255,0.18)' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, marginBottom:compact?10:14 }}>
+        <div>
+          <div style={S.label}>Alocacao atual</div>
+          <div style={{ fontSize:compact?18:22, fontWeight:600 }}>{fmt(total)}</div>
+        </div>
+        {aporte && (
+          <div style={{ textAlign:'right', maxWidth:135 }}>
+            <div style={{ fontSize:10, color:'rgba(255,255,255,0.35)', fontFamily:"'DM Mono',monospace", textTransform:'uppercase' }}>Menor peso</div>
+            <div style={{ fontSize:12, color:aporte.color, fontWeight:600 }}>{aporte.short}</div>
+          </div>
+        )}
+      </div>
+
+      {total > 0 ? (
+        <>
+          <div style={{ display:'grid', gridTemplateColumns:compact?'82px 1fr':'104px 1fr', gap:14, alignItems:'center' }}>
+            <div style={{ height:compact?82:104 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={data} dataKey="value" innerRadius={compact?25:32} outerRadius={compact?39:50} paddingAngle={3} stroke="none">
+                    {data.map(item => <Cell key={item.key} fill={item.color} />)}
+                  </Pie>
+                  <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v)]} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{ display:'grid', gap:8 }}>
+              {data.map(item => {
+                const pct = total > 0 ? (item.value / total) * 100 : 0
+                return (
+                  <div key={item.key}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, marginBottom:4 }}>
+                      <div style={{ display:'flex', alignItems:'center', gap:7, minWidth:0 }}>
+                        <span style={{ width:8, height:8, borderRadius:'50%', background:item.color, flexShrink:0 }} />
+                        <span style={{ fontSize:12, color:'rgba(255,255,255,0.72)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{item.label}</span>
+                      </div>
+                      <span style={{ fontSize:12, fontWeight:600, color:item.color }}>{pct.toFixed(1)}%</span>
+                    </div>
+                    <div style={{ height:6, background:'#1C1D25', borderRadius:999, overflow:'hidden' }}>
+                      <div style={{ width:`${pct}%`, height:'100%', background:item.color, borderRadius:999 }} />
+                    </div>
+                    <div style={{ fontSize:11, color:'rgba(255,255,255,0.38)', marginTop:3 }}>{fmt(item.value)}</div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+          <div style={{ marginTop:12, padding:'10px 12px', background:'#1C1D25', borderRadius:10, color:'rgba(255,255,255,0.58)', fontSize:12, lineHeight:1.35 }}>
+            Atualize os saldos uma vez por mes e use este mapa para comparar com sua meta pessoal antes de aportar.
+          </div>
+        </>
+      ) : (
+        <div style={{ ...S.muted, textAlign:'center', padding:'10px 0' }}>Cadastre os saldos para ver caixa, renda fixa e variavel.</div>
+      )}
     </div>
   )
 }
@@ -393,7 +474,7 @@ function CategoriesManager({ uid, savedCats, onSave }: { uid: string; savedCats:
   )
 }
 
-// ─── LOGIN ─────────────────────────────────────────────────────────────────
+// â”€â”€â”€ LOGIN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function LoginScreen() {
   const [email, setEmail] = useState('')
@@ -434,7 +515,7 @@ function LoginScreen() {
   )
 }
 
-// ─── PAINEL ────────────────────────────────────────────────────────────────
+// â”€â”€â”€ PAINEL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function PainelScreen({ uid }: { uid: string }) {
   const [txs, setTxs] = useState<Transaction[]>([])
@@ -504,6 +585,8 @@ function PainelScreen({ uid }: { uid: string }) {
           <span style={{ fontSize:12, color:'#E24B4A' }}>Despesa -{fmt(saldo)}</span>
         </div>
       </div>
+
+      <AllocationCard caixa={caixa} investimentos={investimentos} external={external} />
 
       <div style={S.card}>
         <div style={S.label}>Patrimonio total</div>
@@ -577,7 +660,7 @@ function PainelScreen({ uid }: { uid: string }) {
             </ResponsiveContainer>
           </div>
           <div style={{ display:'flex', gap:16, marginTop:4 }}>
-            <span style={{ fontSize:10, color:'#4E9EFF' }}>— Patrimônio</span>
+            <span style={{ fontSize:10, color:'#4E9EFF' }}>â€” PatrimÃ´nio</span>
             <span style={{ fontSize:10, color:'#00E5A0' }}>-- Investimentos</span>
           </div>
         </div>
@@ -610,7 +693,7 @@ function PainelScreen({ uid }: { uid: string }) {
   )
 }
 
-// ─── GASTOS ────────────────────────────────────────────────────────────────
+// â”€â”€â”€ GASTOS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function GastosScreen({ uid }: { uid: string }) {
   const [tab, setTab] = useState<'add'|'fixos'|'list'|'cats'>('add')
@@ -721,7 +804,7 @@ function GastosScreen({ uid }: { uid: string }) {
 
       {tab==='fixos' && (
         <>
-          <div style={{ ...S.label, marginBottom:8 }}>Gastos fixos — {monthLabel(mk)}</div>
+          <div style={{ ...S.label, marginBottom:8 }}>Gastos fixos â€” {monthLabel(mk)}</div>
           {fixedExpenses.length===0
             ? <div style={{ ...S.muted, textAlign:'center', padding:'16px 0' }}>Nenhum gasto fixo cadastrado</div>
             : <div style={S.card}>
@@ -763,7 +846,7 @@ function GastosScreen({ uid }: { uid: string }) {
   )
 }
 
-// ─── RECEITAS ──────────────────────────────────────────────────────────────
+// â”€â”€â”€ RECEITAS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function ReceitasScreen({ uid }: { uid: string }) {
   const [tab, setTab] = useState<'add'|'list'>('add')
@@ -874,7 +957,7 @@ function ReceitasScreen({ uid }: { uid: string }) {
   )
 }
 
-// ─── TRANSFER HISTORY ──────────────────────────────────────────────────────
+// â”€â”€â”€ TRANSFER HISTORY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function TransferHistory({ transfers, configs, selectedMonth, onDelete, onUpdate }: {
   transfers: Transfer[]
@@ -908,7 +991,7 @@ function TransferHistory({ transfers, configs, selectedMonth, onDelete, onUpdate
       amount: v,
       fromAccount: editFrom,
       toAccount: editTo,
-      description: editDesc.trim() || `${editFrom} → ${editTo}`,
+      description: editDesc.trim() || `${editFrom} â†’ ${editTo}`,
     })
     setSaving(false)
     setEditingId(null)
@@ -963,7 +1046,7 @@ function TransferHistory({ transfers, configs, selectedMonth, onDelete, onUpdate
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {t.fromAccount} → {t.toAccount}
+                    {t.fromAccount} â†’ {t.toAccount}
                   </div>
                   <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginTop: 2 }}>{t.description}</div>
                 </div>
@@ -998,7 +1081,7 @@ function TransferHistory({ transfers, configs, selectedMonth, onDelete, onUpdate
   )
 }
 
-// ─── CONTAS ────────────────────────────────────────────────────────────────
+// â”€â”€â”€ CONTAS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function ContasScreen({ uid }: { uid: string }) {
   const allMonths = generateMonths()
@@ -1063,7 +1146,7 @@ function ContasScreen({ uid }: { uid: string }) {
   const addTransfer = async () => {
     const v = parseFloat(trAmt.replace(',','.'))
     if (!v||v<=0||!trFrom||!trTo||trFrom===trTo) { setTrMsg('Preencha todos os campos'); return }
-    await addDoc(collection(db,'users',uid,'transfers'), { amount:v, fromAccount:trFrom, toAccount:trTo, month:selectedMonth, description:trDesc.trim()||`${trFrom} → ${trTo}`, createdAt:Date.now() })
+    await addDoc(collection(db,'users',uid,'transfers'), { amount:v, fromAccount:trFrom, toAccount:trTo, month:selectedMonth, description:trDesc.trim()||`${trFrom} â†’ ${trTo}`, createdAt:Date.now() })
     setTrAmt(''); setTrDesc(''); setTrMsg('Transferencia registrada!')
     setTimeout(() => { setTrMsg(''); setShowTransfer(false) }, 2000); load()
   }
@@ -1144,7 +1227,7 @@ function ContasScreen({ uid }: { uid: string }) {
         </div>
       ) : (
         <>
-          {/* Resumo — Patrimônio */}
+          {/* Resumo â€” PatrimÃ´nio */}
           <div style={{ marginBottom:8 }}>
             <MetricCard
               label="Patrimonio"
@@ -1183,13 +1266,9 @@ function ContasScreen({ uid }: { uid: string }) {
             </div>
           </div>
 
-          {/* Caixa + Trading */}
-          <div style={{ display:'grid', gridTemplateColumns: configs.some(c => c.type==='external') ? '1fr 1fr' : '1fr', gap:8, marginBottom:10 }}>
-            <MetricCard label="Caixa" value={fmt(caixaAtual)} accent="#4E9EFF" />
-            {configs.some(c => c.type==='external') && <MetricCard label="Trading" value={fmt(externalAtual)} accent="#FF9F43" />}
-          </div>
+          <AllocationCard caixa={caixaAtual} investimentos={investAtual} external={externalAtual} compact />
 
-          {/* Gráfico */}
+          {/* GrÃ¡fico */}
           {chartData.length>1 && (
             <div style={{ ...S.card, marginBottom:12 }}>
               <div style={S.label}>Historico</div>
@@ -1212,12 +1291,12 @@ function ContasScreen({ uid }: { uid: string }) {
             </div>
           )}
 
-          {/* Botão de transferência */}
+          {/* BotÃ£o de transferÃªncia */}
           <button onClick={() => setShowTransfer(!showTransfer)} style={{ ...S.btnGhost, marginTop:0, marginBottom:10, fontSize:12 }}>
             {showTransfer ? 'Cancelar transferencia' : '+ Registrar transferencia entre contas'}
           </button>
 
-          {/* Formulário de transferência */}
+          {/* FormulÃ¡rio de transferÃªncia */}
           {showTransfer && (
             <div style={{ ...S.card, marginBottom:12 }}>
               <div style={{ ...S.label, marginBottom:10 }}>Transferencia</div>
@@ -1240,7 +1319,7 @@ function ContasScreen({ uid }: { uid: string }) {
             </div>
           )}
 
-          {/* Histórico de transferências */}
+          {/* HistÃ³rico de transferÃªncias */}
           {monthTransfers.length > 0 && (
             <TransferHistory
               transfers={monthTransfers}
@@ -1295,7 +1374,7 @@ function ContasScreen({ uid }: { uid: string }) {
   )
 }
 
-// ─── RELATÓRIO ─────────────────────────────────────────────────────────────
+// â”€â”€â”€ RELATÃ“RIO â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function RelatorioScreen({ uid }: { uid: string }) {
   const [txs, setTxs] = useState<Transaction[]>([])
@@ -1326,6 +1405,10 @@ function RelatorioScreen({ uid }: { uid: string }) {
   const patrimonio = calcPatrimonio(entries,selectedMonth,configs)
   const patrimonioPrev = calcPatrimonio(entries,pmk,configs)
   const investimentos = calcInvestimentos(entries,selectedMonth,configs)
+  const caixa = calcCaixa(entries,selectedMonth,configs)
+  const external = calcExternal(entries,selectedMonth,configs)
+  const totalAlocado = caixa + investimentos + external
+  const allocationData = getAllocationData(caixa, investimentos, external)
   const rendimento = calcRendimento(entries,transfers,selectedMonth,pmk,configs)
   const rendPct = calcInvestimentos(entries,pmk,configs)>0 ? (rendimento/calcInvestimentos(entries,pmk,configs))*100 : 0
   const meta10 = calcInvestimentos(entries,pmk,configs)*(10/12/100)
@@ -1349,6 +1432,11 @@ PATRIMONIO (sem trading externo)
 Atual: ${fmt(patrimonio)}
 Anterior: ${fmt(patrimonioPrev)}
 Variacao: ${fmt(patrimonio-patrimonioPrev)}
+
+ALOCACAO
+Caixa: ${fmt(caixa)}${totalAlocado>0?` (${((caixa/totalAlocado)*100).toFixed(1)}%)`:''}
+Renda fixa / investimentos: ${fmt(investimentos)}${totalAlocado>0?` (${((investimentos/totalAlocado)*100).toFixed(1)}%)`:''}
+Renda variavel / trading: ${fmt(external)}${totalAlocado>0?` (${((external/totalAlocado)*100).toFixed(1)}%)`:''}
 
 INVESTIMENTOS
 Total investido: ${fmt(investimentos)}
@@ -1390,6 +1478,23 @@ ${mTxs.map(t => `${t.type==='income'?'+':'-'} ${fmt(t.value)} | ${t.description}
         <MetricCard label="Receitas" value={fmt(totalReceita)} accent="#00E5A0" />
         <MetricCard label="Gastos" value={fmt(totalGasto)} accent="#E24B4A" />
       </div>
+      <AllocationCard caixa={caixa} investimentos={investimentos} external={external} compact />
+
+      {allocationData.length > 0 && (
+        <div style={{ ...S.card, marginBottom:10 }}>
+          <div style={{ ...S.label, marginBottom:10 }}>Leitura rapida</div>
+          {allocationData.map(item => {
+            const pct = totalAlocado > 0 ? (item.value / totalAlocado) * 100 : 0
+            return (
+              <div key={item.key} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderBottom:'0.5px solid rgba(255,255,255,0.05)' }}>
+                <span style={{ fontSize:13, color:'rgba(255,255,255,0.72)' }}>{item.label}</span>
+                <span style={{ fontSize:13, fontWeight:600, color:item.color }}>{fmt(item.value)} - {pct.toFixed(1)}%</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
       <div style={S.card}>
         <div style={{ ...S.label, marginBottom:10 }}>Texto para IA</div>
         <div style={{ background:'#0D0E14', borderRadius:10, padding:12, fontFamily:"'DM Mono',monospace", fontSize:10.5, color:'rgba(255,255,255,0.6)', lineHeight:1.7, maxHeight:200, overflowY:'auto', whiteSpace:'pre-wrap' }}>{relatorio}</div>
@@ -1400,7 +1505,7 @@ ${mTxs.map(t => `${t.type==='income'?'+':'-'} ${fmt(t.value)} | ${t.description}
   )
 }
 
-// ─── NAV ───────────────────────────────────────────────────────────────────
+// â”€â”€â”€ NAV â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const navIcons: Record<string,string> = {
   painel:'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z',
@@ -1414,7 +1519,7 @@ const NavIcon = ({ type }: { type: string }) => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d={navIcons[type]} /></svg>
 )
 
-// ─── APP ROOT ──────────────────────────────────────────────────────────────
+// â”€â”€â”€ APP ROOT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type Screen = 'painel'|'gastos'|'receitas'|'contas'|'relatorio'
 
@@ -1457,3 +1562,4 @@ export default function App() {
     </div>
   )
 }
+
