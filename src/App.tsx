@@ -694,69 +694,37 @@ function PainelScreen({ uid }: { uid: string }) {
       <div style={S.card}>
         <div style={S.label}>Patrimonio total</div>
         <div style={{ fontSize:26, fontWeight:600, marginBottom:12 }}>{fmt(patrimonio)}</div>
-        <div
-  style={{
-    background:'#1C1D25',
-    borderRadius:12,
-    padding:'12px 14px'
-  }}
->
-  <div
-    style={{
-      fontSize:10,
-      color:'#4E9EFF',
-      letterSpacing:'0.08em',
-      textTransform:'uppercase',
-      fontFamily:"'DM Mono', monospace",
-      marginBottom:8
-    }}
-  >
-    Fluxo do mês
-  </div>
+        <div style={{ background:'#1C1D25', borderRadius:12, padding:'12px 14px' }}>
+          <div style={{ fontSize:10, color:'#4E9EFF', letterSpacing:'0.08em', textTransform:'uppercase', fontFamily:"'DM Mono', monospace", marginBottom:8 }}>
+            Fluxo do mês
+          </div>
 
-  <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
-    <span style={{color:'rgba(255,255,255,0.6)'}}>Receitas</span>
-    <span style={{color:'#00E5A0'}}>{fmt(totalReceita)}</span>
-  </div>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+            <span style={{color:'rgba(255,255,255,0.6)'}}>Receitas</span>
+            <span style={{color:'#00E5A0'}}>{fmt(totalReceita)}</span>
+          </div>
 
-  <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
-    <span style={{color:'rgba(255,255,255,0.6)'}}>Despesas</span>
-    <span style={{color:'#E24B4A'}}>{fmt(saldo)}</span>
-  </div>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+            <span style={{color:'rgba(255,255,255,0.6)'}}>Despesas</span>
+            <span style={{color:'#E24B4A'}}>{fmt(saldo)}</span>
+          </div>
 
-  <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
-    <span style={{fontWeight:600}}>Sobra</span>
-    <span style={{fontWeight:600,color:'#00E5A0'}}>
-      {fmt(totalReceita - saldo)}
-    </span>
-  </div>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+            <span style={{fontWeight:600}}>Sobra</span>
+            <span style={{fontWeight:600,color:'#00E5A0'}}>
+              {fmt(totalReceita - saldo)}
+            </span>
+          </div>
 
-  <div
-    style={{
-      height:1,
-      background:'rgba(255,255,255,0.08)',
-      margin:'6px 0 8px'
-    }}
-  />
+          <div style={{height:1,background:'rgba(255,255,255,0.08)',margin:'6px 0 8px'}} />
 
-  <div style={{display:'flex',justifyContent:'space-between'}}>
-    <span style={{color:'rgba(255,255,255,0.5)'}}>
-      Taxa poupança
-    </span>
-
-    <span
-      style={{
-        color:'#4E9EFF',
-        fontWeight:600
-      }}
-    >
-      {totalReceita > 0
-        ? (((totalReceita - saldo) / totalReceita) * 100).toFixed(1)
-        : '0'}
-      %
-    </span>
-  </div>
-</div>
+          <div style={{display:'flex',justifyContent:'space-between'}}>
+            <span style={{color:'rgba(255,255,255,0.5)'}}>Taxa poupança</span>
+            <span style={{color:'#4E9EFF',fontWeight:600}}>
+              {totalReceita > 0 ? (((totalReceita - saldo) / totalReceita) * 100).toFixed(1) : '0'}%
+            </span>
+          </div>
+        </div>
 
       </div>
 
@@ -1660,7 +1628,6 @@ export default function App() {
     </div>
   )
 }
-
 
 
 
