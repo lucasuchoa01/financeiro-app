@@ -682,37 +682,131 @@ function PainelScreen({ uid }: { uid: string }) {
 
   return (
     <div style={S.screen}>
-      <div style={{ marginBottom:16 }}>
-        <div style={S.label}>Evolucao do mes</div>
-        <div style={{ fontSize:30, fontWeight:600, color:evolucaoPatrimonio>=0?'#00E5A0':'#E24B4A', letterSpacing:'-0.02em' }}>{fmt(evolucaoPatrimonio)}</div>
-        <div style={{ display:'flex', gap:16, marginTop:6 }}>
-          <span style={{ fontSize:12, color:'#00E5A0' }}>Receita +{fmt(totalReceita)}</span>
-          <span style={{ fontSize:12, color:'#E24B4A' }}>Despesa -{fmt(saldo)}</span>
-        </div>
-      </div>
+      
 
       <div style={S.card}>
-        <div style={S.label}>Patrimonio total</div>
-        <div style={{ fontSize:26, fontWeight:600, marginBottom:12 }}>{fmt(patrimonio)}</div>
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
-          <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
-            <div style={{ fontSize:10, color:'#4E9EFF', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>EVOLUCAO DO MES</div>
-            <div style={{ fontSize:14, fontWeight:600, color:evolucaoPatrimonio>=0?'#00E5A0':'#E24B4A' }}>{fmt(evolucaoPatrimonio)}</div>
-          </div>
-          <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
-            <div style={{ fontSize:10, color:'#00E5A0', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>RECEITA</div>
-            <div style={{ fontSize:14, fontWeight:600 }}>{fmt(totalReceita)}</div>
-          </div>
-          <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
-            <div style={{ fontSize:10, color:'#E24B4A', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>DESPESA</div>
-            <div style={{ fontSize:14, fontWeight:600 }}>{fmt(saldo)}</div>
-          </div>
-          <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
-            <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>VARIACAO</div>
-            <div style={{ fontSize:14, fontWeight:600, color:varPatrimonio>=0?'#00E5A0':'#E24B4A' }}>{fmtPct(varPatrimonio)}</div>
-          </div>
-        </div>
+  <div style={S.label}>Patrimônio Total</div>
 
+  <div
+    style={{
+      fontSize: 36,
+      fontWeight: 700,
+      marginTop: 6,
+      marginBottom: 20,
+      letterSpacing: '-0.03em'
+    }}
+  >
+    {fmt(patrimonio)}
+  </div>
+
+  <div
+    style={{
+      background: '#1C1D25',
+      borderRadius: 14,
+      padding: 16,
+      marginBottom: 12
+    }}
+  >
+    <div
+      style={{
+        fontSize: 10,
+        color: '#4E9EFF',
+        fontFamily: "'DM Mono', monospace",
+        textTransform: 'uppercase',
+        marginBottom: 6
+      }}
+    >
+      Evolução do mês
+    </div>
+
+    <div
+      style={{
+        fontSize: 28,
+        fontWeight: 700,
+        color: evolucaoPatrimonio >= 0 ? '#00E5A0' : '#E24B4A'
+      }}
+    >
+      {fmt(evolucaoPatrimonio)}
+    </div>
+
+    <div
+      style={{
+        marginTop: 4,
+        fontSize: 12,
+        color: varPatrimonio >= 0 ? '#00E5A0' : '#E24B4A'
+      }}
+    >
+      {fmtPct(varPatrimonio)} em relação ao mês anterior
+    </div>
+  </div>
+
+  <div
+    style={{
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 10
+    }}
+  >
+    <div
+      style={{
+        background: 'rgba(0,229,160,0.08)',
+        borderRadius: 12,
+        padding: 12
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          color: '#00E5A0',
+          fontFamily: "'DM Mono', monospace",
+          textTransform: 'uppercase'
+        }}
+      >
+        Receita
+      </div>
+
+      <div
+        style={{
+          marginTop: 4,
+          fontSize: 20,
+          fontWeight: 700
+        }}
+      >
+        {fmt(totalReceita)}
+      </div>
+    </div>
+
+    <div
+      style={{
+        background: 'rgba(226,75,74,0.08)',
+        borderRadius: 12,
+        padding: 12
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          color: '#E24B4A',
+          fontFamily: "'DM Mono', monospace",
+          textTransform: 'uppercase'
+        }}
+      >
+        Despesa
+      </div>
+
+      <div
+        style={{
+          marginTop: 4,
+          fontSize: 20,
+          fontWeight: 700
+        }}
+      >
+        {fmt(saldo)}
+      </div>
+    </div>
+  </div>
+</div>
+       
       </div>
 
       <AllocationCard data={allocationData} editableTargets onTargetChange={updateAllocationTarget} />
