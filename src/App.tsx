@@ -351,8 +351,13 @@ const DEFAULT_ALLOCATION_TARGETS: Record<AccountClass, number> = {
 function classifyAccount(name: string, configs: AccountConfig[]): AccountClass {
   const n = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
 
-  if (n.includes('nubank') || n.includes('wise')) return 'cash'
   if (n.includes('reserva')) return 'reserve'
+  if (
+  (n.includes('nubank') || n.includes('wise')) &&
+  !n.includes('reserva')
+  ) {
+  return 'cash'
+  }
   if (n.includes('renda fixa') || n.includes('cdb') || n.includes('tesouro') || n.includes('selic')) return 'fixed'
   if (n.includes('clear') || n.includes('acoes') || n.includes('fii') || n.includes('b3')) return 'variable'
   if (n.includes('forex') || n.includes('prop') || n.includes('proprio')) return 'trading'
