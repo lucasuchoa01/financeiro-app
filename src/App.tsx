@@ -767,16 +767,25 @@ function PainelScreen({ uid }: { uid: string }) {
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.42)',fontSize:10 }} axisLine={false} tickLine={false} />
-                <YAxis width={68} tick={{ fill:'rgba(255,255,255,0.35)',fontSize:10 }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${Math.round(v/1000)}k`} />
+                <YAxis
+                  width={55}
+                  domain={[
+                    (dataMin:number) => Math.floor(dataMin * 0.95),
+                    (dataMax:number) => Math.ceil(dataMax * 1.05)
+                  ]}
+                  tick={{ fill:'rgba(255,255,255,0.35)',fontSize:10 }}
+                  axisLine={false}
+                  tickLine={false}
+                  tickFormatter={(v:number) => `${Math.round(v/1000)}k`}
+                />
                 <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v)]} />
                 <Area type="monotone" dataKey="patrimonio" name="Patrimonio" stroke="#4E9EFF" strokeWidth={2} fill="url(#gP)" />
-                <Area type="monotone" dataKey="investimentos" name="Investimentos" stroke="#00E5A0" strokeWidth={1.5} fill="url(#gI)" strokeDasharray="4 2" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
           <div style={{ display:'flex', gap:16, marginTop:4 }}>
             <span style={{ fontSize:10, color:'#4E9EFF' }}>Patrimonio</span>
-            <span style={{ fontSize:10, color:'#00E5A0' }}>Investimentos</span>
+            
           </div>
           <div style={{ display:'grid', gap:6, marginTop:12 }}>
             {chartData.map(row => (
