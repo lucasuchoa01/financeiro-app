@@ -357,7 +357,7 @@ function classifyAccount(name: string, configs: AccountConfig[]): AccountClass {
   !n.includes('reserva')
   ) {
   return 'cash'
-  }
+}
   if (n.includes('renda fixa') || n.includes('cdb') || n.includes('tesouro') || n.includes('selic')) return 'fixed'
   if (n.includes('clear') || n.includes('acoes') || n.includes('fii') || n.includes('b3')) return 'variable'
   if (n.includes('forex') || n.includes('prop') || n.includes('proprio')) return 'trading'
@@ -694,35 +694,22 @@ function PainelScreen({ uid }: { uid: string }) {
       <div style={S.card}>
         <div style={S.label}>Patrimonio total</div>
         <div style={{ fontSize:26, fontWeight:600, marginBottom:12 }}>{fmt(patrimonio)}</div>
-        <div style={{ background:'#1C1D25', borderRadius:12, padding:'12px 14px' }}>
-          <div style={{ fontSize:10, color:'#4E9EFF', letterSpacing:'0.08em', textTransform:'uppercase', fontFamily:"'DM Mono', monospace", marginBottom:8 }}>
-            Fluxo do mês
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+          <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
+            <div style={{ fontSize:10, color:'#4E9EFF', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>EVOLUCAO DO MES</div>
+            <div style={{ fontSize:14, fontWeight:600, color:evolucaoPatrimonio>=0?'#00E5A0':'#E24B4A' }}>{fmt(evolucaoPatrimonio)}</div>
           </div>
-
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
-            <span style={{color:'rgba(255,255,255,0.6)'}}>Receitas</span>
-            <span style={{color:'#00E5A0'}}>{fmt(totalReceita)}</span>
+          <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
+            <div style={{ fontSize:10, color:'#00E5A0', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>RECEITA</div>
+            <div style={{ fontSize:14, fontWeight:600 }}>{fmt(totalReceita)}</div>
           </div>
-
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
-            <span style={{color:'rgba(255,255,255,0.6)'}}>Despesas</span>
-            <span style={{color:'#E24B4A'}}>{fmt(saldo)}</span>
+          <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
+            <div style={{ fontSize:10, color:'#E24B4A', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>DESPESA</div>
+            <div style={{ fontSize:14, fontWeight:600 }}>{fmt(saldo)}</div>
           </div>
-
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
-            <span style={{fontWeight:600}}>Sobra</span>
-            <span style={{fontWeight:600,color:'#00E5A0'}}>
-              {fmt(totalReceita - saldo)}
-            </span>
-          </div>
-
-          <div style={{height:1,background:'rgba(255,255,255,0.08)',margin:'6px 0 8px'}} />
-
-          <div style={{display:'flex',justifyContent:'space-between'}}>
-            <span style={{color:'rgba(255,255,255,0.5)'}}>Taxa poupança</span>
-            <span style={{color:'#4E9EFF',fontWeight:600}}>
-              {totalReceita > 0 ? (((totalReceita - saldo) / totalReceita) * 100).toFixed(1) : '0'}%
-            </span>
+          <div style={{ background:'#1C1D25', borderRadius:10, padding:10 }}>
+            <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', marginBottom:3, fontFamily:"'DM Mono',monospace" }}>VARIACAO</div>
+            <div style={{ fontSize:14, fontWeight:600, color:varPatrimonio>=0?'#00E5A0':'#E24B4A' }}>{fmtPct(varPatrimonio)}</div>
           </div>
         </div>
 
@@ -767,25 +754,16 @@ function PainelScreen({ uid }: { uid: string }) {
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.42)',fontSize:10 }} axisLine={false} tickLine={false} />
-                <YAxis
-                  width={55}
-                  domain={[
-                    (dataMin:number) => Math.floor(dataMin * 0.95),
-                    (dataMax:number) => Math.ceil(dataMax * 1.05)
-                  ]}
-                  tick={{ fill:'rgba(255,255,255,0.35)',fontSize:10 }}
-                  axisLine={false}
-                  tickLine={false}
-                  tickFormatter={(v:number) => `${Math.round(v/1000)}k`}
-                />
+                <YAxis width={68} tick={{ fill:'rgba(255,255,255,0.35)',fontSize:10 }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${Math.round(v/1000)}k`} />
                 <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v)]} />
                 <Area type="monotone" dataKey="patrimonio" name="Patrimonio" stroke="#4E9EFF" strokeWidth={2} fill="url(#gP)" />
+                <Area type="monotone" dataKey="investimentos" name="Investimentos" stroke="#00E5A0" strokeWidth={1.5} fill="url(#gI)" strokeDasharray="4 2" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
           <div style={{ display:'flex', gap:16, marginTop:4 }}>
             <span style={{ fontSize:10, color:'#4E9EFF' }}>Patrimonio</span>
-            
+            <span style={{ fontSize:10, color:'#00E5A0' }}>Investimentos</span>
           </div>
           <div style={{ display:'grid', gap:6, marginTop:12 }}>
             {chartData.map(row => (
@@ -1637,17 +1615,3 @@ export default function App() {
     </div>
   )
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
