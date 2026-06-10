@@ -809,11 +809,8 @@ function PainelScreen({ uid }: { uid: string }) {
       >
         {fmt(saldo)}
       </div>
-    </div>
+        </div>
   </div>
-</div>
-       
-      </div>
 
       <AllocationCard data={allocationData} editableTargets onTargetChange={updateAllocationTarget} />
 
