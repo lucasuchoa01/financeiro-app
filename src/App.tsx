@@ -78,7 +78,13 @@ const todayStr = () => {
 
 const currentMonthKey = () => {
   const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`
+
+  // Até o dia 05 continua no mês anterior
+  if (d.getDate() <= 5) {
+    d.setMonth(d.getMonth() - 1)
+  }
+
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
 const monthLabel = (key: string) => {
