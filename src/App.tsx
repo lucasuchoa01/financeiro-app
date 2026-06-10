@@ -808,12 +808,13 @@ function PainelScreen({ uid }: { uid: string }) {
         }}
       >
         {fmt(saldo)}
-      </div>
-        </div>
+            </div>
+    </div>
   </div>
+</div>
 
       <AllocationCard data={allocationData} editableTargets onTargetChange={updateAllocationTarget} />
-
+      
       {investimentosPrev > 0 && (
         <div style={{ ...S.card, border:'0.5px solid rgba(0,229,160,0.2)' }}>
           <div style={{ ...S.label, color:'#00E5A0' }}>Rendimento dos investimentos</div>
