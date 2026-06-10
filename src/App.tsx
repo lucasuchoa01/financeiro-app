@@ -929,15 +929,23 @@ function PainelScreen({ uid }: { uid: string }) {
       {catData.length > 0 && (
         <div style={S.card}>
           <div style={S.label}>Top gastos do mes</div>
-          <div style={{ height:130, marginTop:10 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={catData} layout="vertical">
-                <XAxis type="number" hide />
-                <YAxis type="category" dataKey="cat" tick={{ fill:'rgba(255,255,255,0.5)',fontSize:11 }} axisLine={false} tickLine={false} width={90} />
-                <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v)]} />
-                <Bar dataKey="total" fill="#4E9EFF" radius={[0,6,6,0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          <div style={{ marginTop:10, display:'flex', flexDirection:'column', gap:7 }}>
+            {(() => {
+              const max = catData[0]?.total || 1
+              const colors = ['#4E9EFF','#7BB8FF','#5BC4F5','#4DD9C0','#6F8EFF']
+              return catData.map((item, i) => {
+                const pct = Math.max((item.total / max) * 100, 4)
+                return (
+                  <div key={item.cat} style={{ display:'flex', alignItems:'center', gap:8 }}>
+                    <div style={{ width:82, fontSize:11, color:'rgba(255,255,255,0.5)', textAlign:'right', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{item.cat}</div>
+                    <div style={{ flex:1, position:'relative', height:22, background:'rgba(255,255,255,0.05)', borderRadius:6, overflow:'hidden' }}>
+                      <div style={{ position:'absolute', left:0, top:0, bottom:0, width:`${pct}%`, background:colors[i % colors.length], borderRadius:6 }} />
+                      <div style={{ position:'absolute', right:8, top:0, bottom:0, display:'flex', alignItems:'center', fontSize:11, fontWeight:600, color:'#fff', whiteSpace:'nowrap' }}>{fmt(item.total)}</div>
+                    </div>
+                  </div>
+                )
+              })
+            })()}
           </div>
         </div>
       )}
