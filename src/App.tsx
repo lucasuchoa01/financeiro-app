@@ -1069,7 +1069,7 @@ function GastosScreen({ uid }: { uid: string }) {
 
       {tab==='fixos' && (
         <>
-          <div style={{ ...S.label, marginBottom:8 }}>Gastos fixos â€” {monthLabel(mk)}</div>
+          <div style={{ ...S.label, marginBottom:8 }}>Gastos fixos — {monthLabel(mk)}</div>
           {fixedExpenses.length===0
             ? <div style={{ ...S.muted, textAlign:'center', padding:'16px 0' }}>Nenhum gasto fixo cadastrado</div>
             : <div style={S.card}>
