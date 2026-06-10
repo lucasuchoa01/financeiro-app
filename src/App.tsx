@@ -485,12 +485,41 @@ function AllocationCard({ caixa, investimentos, external, data: customData, comp
   )
 }
 
-function FixedExpenseList({ fixedExpenses, isPaid, togglePaid, deleteFixed }: {
+function FixedExpenseList({ fixedExpenses, isPaid, togglePaid, deleteFixed, editFixed, accountNames, savedCats }: {
   fixedExpenses: FixedExpense[]
   isPaid: (fx: FixedExpense) => boolean
   togglePaid: (fx: FixedExpense) => void
   deleteFixed: (id: string) => void
+  editFixed: (id: string, fields: Partial<Omit<FixedExpense, 'id' | 'createdAt'>>) => Promise<void>
+  accountNames: string[]
+  savedCats: string[]
 }) {
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editAmt, setEditAmt] = useState('')
+  const [editCat, setEditCat] = useState('')
+  const [editAccount, setEditAccount] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const startEdit = (fx: FixedExpense) => {
+    setEditingId(fx.id)
+    setEditName(fx.name)
+    setEditAmt(String(fx.amount))
+    setEditCat(fx.category)
+    setEditAccount(fx.account)
+  }
+
+  const cancelEdit = () => setEditingId(null)
+
+  const saveEdit = async (id: string) => {
+    const v = parseFloat(editAmt.replace(',', '.'))
+    if (!editName.trim() || !v || v <= 0) return
+    setSaving(true)
+    await editFixed(id, { name: editName.trim(), amount: v, category: editCat.trim() || 'Fixo', account: editAccount })
+    setSaving(false)
+    setEditingId(null)
+  }
+
   const sorted = [...fixedExpenses].sort((a,b) => a.category.localeCompare(b.category)||a.name.localeCompare(b.name))
   const groups: Record<string,FixedExpense[]> = {}
   sorted.forEach(fx => { if (!groups[fx.category]) groups[fx.category]=[]; groups[fx.category].push(fx) })
@@ -502,17 +531,39 @@ function FixedExpenseList({ fixedExpenses, isPaid, togglePaid, deleteFixed }: {
           <div style={{ fontSize:10, color:'#4E9EFF', letterSpacing:'0.1em', textTransform:'uppercase', fontFamily:"'DM Mono',monospace", padding:'10px 0 4px' }}>{cat}</div>
           {items.map(fx => {
             const paid = isPaid(fx)
+            const isEditing = editingId === fx.id
             return (
-              <div key={fx.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 0', borderBottom:'0.5px solid rgba(255,255,255,0.05)' }}>
-                <button onClick={() => togglePaid(fx)} style={{ width:24, height:24, borderRadius:6, border:'none', cursor:'pointer', flexShrink:0, background:paid?'#00E5A0':'rgba(255,255,255,0.1)', display:'flex', alignItems:'center', justifyContent:'center' }}>
-                  {paid && <span style={{ color:'#0A0B0F', fontSize:14, fontWeight:700 }}>&#10003;</span>}
-                </button>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:13, fontWeight:500, color:paid?'rgba(255,255,255,0.4)':'#fff', textDecoration:paid?'line-through':'none' }}>{fx.name}</div>
-                  <div style={{ fontSize:10, color:'rgba(255,255,255,0.3)' }}>{fx.account||''}</div>
+              <div key={fx.id}>
+                <div style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 0', borderBottom: isEditing ? 'none' : '0.5px solid rgba(255,255,255,0.05)' }}>
+                  <button onClick={() => togglePaid(fx)} style={{ width:24, height:24, borderRadius:6, border:'none', cursor:'pointer', flexShrink:0, background:paid?'#00E5A0':'rgba(255,255,255,0.1)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                    {paid && <span style={{ color:'#0A0B0F', fontSize:14, fontWeight:700 }}>&#10003;</span>}
+                  </button>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:13, fontWeight:500, color:paid?'rgba(255,255,255,0.4)':'#fff', textDecoration:paid?'line-through':'none' }}>{fx.name}</div>
+                    <div style={{ fontSize:10, color:'rgba(255,255,255,0.3)' }}>{fx.account||''}</div>
+                  </div>
+                  <div style={{ fontSize:13, fontWeight:500, color:paid?'rgba(255,255,255,0.35)':'#E24B4A' }}>{fmt(fx.amount)}</div>
+                  <button onClick={() => isEditing ? cancelEdit() : startEdit(fx)} style={{ background:'none', border:'none', color:isEditing?'#4E9EFF':'rgba(255,255,255,0.35)', cursor:'pointer', fontSize:13, padding:'0 2px' }}>✏️</button>
+                  <button onClick={() => deleteFixed(fx.id)} style={{ background:'none', border:'none', color:'rgba(255,255,255,0.2)', cursor:'pointer', fontSize:16, padding:'0 2px' }}>x</button>
                 </div>
-                <div style={{ fontSize:13, fontWeight:500, color:paid?'rgba(255,255,255,0.35)':'#E24B4A' }}>{fmt(fx.amount)}</div>
-                <button onClick={() => deleteFixed(fx.id)} style={{ background:'none', border:'none', color:'rgba(255,255,255,0.2)', cursor:'pointer', fontSize:16, padding:'0 2px' }}>x</button>
+                {isEditing && (
+                  <div style={{ background:'#1C1D25', borderRadius:12, padding:14, marginBottom:8, border:'0.5px solid rgba(78,158,255,0.25)' }}>
+                    <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Nome</div>
+                    <input style={S.input} value={editName} onChange={e => setEditName(e.target.value)} placeholder="Nome do gasto" />
+                    <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
+                    <input style={S.input} type="number" inputMode="decimal" value={editAmt} onChange={e => setEditAmt(e.target.value)} placeholder="0,00" />
+                    <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
+                    <CategoryInput value={editCat} onChange={setEditCat} savedCategories={savedCats} placeholder="Categoria..." />
+                    <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
+                    <select style={{ ...S.select, marginBottom:12 }} value={editAccount} onChange={e => setEditAccount(e.target.value)}>
+                      {accountNames.map(a => <option key={a} value={a}>{a}</option>)}
+                    </select>
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+                      <button style={{ ...S.btn, opacity:saving?0.6:1 }} onClick={() => saveEdit(fx.id)} disabled={saving}>{saving?'Salvando...':'Salvar alteracoes'}</button>
+                      <button style={{ ...S.btnGhost, marginTop:0 }} onClick={cancelEdit}>Cancelar</button>
+                    </div>
+                  </div>
+                )}
               </div>
             )
           })}
@@ -965,6 +1016,11 @@ function GastosScreen({ uid }: { uid: string }) {
 
   const deleteFixed = async (id: string) => { await deleteDoc(doc(db,'users',uid,'fixedExpenses',id)); load() }
 
+  const editFixed = async (id: string, fields: Partial<Omit<FixedExpense, 'id' | 'createdAt'>>) => {
+    await updateDoc(doc(db,'users',uid,'fixedExpenses',id), fields)
+    setFixMsg('Gasto fixo atualizado!'); setTimeout(() => setFixMsg(''),2500); load()
+  }
+
   const isPaid = (fx: FixedExpense) => {
     const [y,m] = mk.split('-')
     return txs.some(t => t.description===`[FIXO] ${fx.name}` && t.date.endsWith(`/${m}/${y}`) && t.type==='expense')
@@ -1017,7 +1073,7 @@ function GastosScreen({ uid }: { uid: string }) {
           {fixedExpenses.length===0
             ? <div style={{ ...S.muted, textAlign:'center', padding:'16px 0' }}>Nenhum gasto fixo cadastrado</div>
             : <div style={S.card}>
-                <FixedExpenseList fixedExpenses={fixedExpenses} isPaid={isPaid} togglePaid={togglePaid} deleteFixed={deleteFixed} />
+                <FixedExpenseList fixedExpenses={fixedExpenses} isPaid={isPaid} togglePaid={togglePaid} deleteFixed={deleteFixed} editFixed={editFixed} accountNames={accountNames} savedCats={savedCats} />
                 <div style={{ paddingTop:10, borderTop:'0.5px solid rgba(255,255,255,0.08)', display:'flex', justifyContent:'space-between' }}>
                   <div style={S.muted}>Total</div>
                   <div style={{ fontSize:13, fontWeight:500 }}>{fmt(fixedExpenses.reduce((s,f) => s+f.amount,0))}</div>
