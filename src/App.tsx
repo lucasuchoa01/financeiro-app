@@ -1,14 +1,15 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth'
 import type { User } from 'firebase/auth'
 import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, updateDoc } from 'firebase/firestore'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts'
 import { auth, db } from './firebase'
 
-// â”€â”€â”€ TYPES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── TYPES ─────────────────────────────────────────────────────────────────
 
 export type TxType = 'expense' | 'income'
 export type AccountType = 'cash' | 'investment' | 'external'
+export type AccountClass = 'cash' | 'reserve' | 'fixed' | 'variable' | 'trading'
 
 export interface Transaction {
   id: string
@@ -19,6 +20,7 @@ export interface Transaction {
   account: string
   date: string
   createdAt: number
+  fixedExpenseId?: string
 }
 
 export interface AccountEntry {
@@ -33,6 +35,7 @@ export interface AccountEntry {
 export interface AccountConfig {
   name: string
   type: AccountType
+  accountClass?: AccountClass
 }
 
 export interface Transfer {
@@ -66,6 +69,22 @@ const ACCOUNT_TYPE_COLORS: Record<AccountType, string> = {
   cash: '#4E9EFF',
   investment: '#00E5A0',
   external: '#FF9F43',
+}
+
+const ACCOUNT_CLASS_LABELS: Record<AccountClass, string> = {
+  cash: 'Caixa',
+  reserve: 'Reserva',
+  fixed: 'Renda fixa',
+  variable: 'Variavel',
+  trading: 'Trading',
+}
+
+const DEFAULT_ALLOCATION_TARGETS: Record<AccountClass, number> = {
+  cash: 0,
+  reserve: 20,
+  fixed: 20,
+  variable: 40,
+  trading: 15,
 }
 
 const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -126,7 +145,7 @@ const S = {
   navBtn: { padding:'8px 0 6px', border:'none', background:'transparent', color:'rgba(255,255,255,0.3)', fontSize:9, fontFamily:"'DM Sans',sans-serif", cursor:'pointer', display:'flex', flexDirection:'column' as const, alignItems:'center', gap:3 },
 }
 
-// â”€â”€â”€ HOOKS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── HOOKS ─────────────────────────────────────────────────────────────────
 
 function useAccountConfigs(uid: string) {
   const [configs, setConfigs] = useState<AccountConfig[]>([])
@@ -186,7 +205,31 @@ function useCategories(uid: string) {
   return { categories, saveCategories, addCategory }
 }
 
-// â”€â”€â”€ HELPERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function useAllocationTargets(uid: string) {
+  const [targets, setTargets] = useState<Record<AccountClass, number>>(DEFAULT_ALLOCATION_TARGETS)
+
+  const load = useCallback(async () => {
+    try {
+      const snap = await getDocs(collection(db,'users',uid,'config'))
+      const cfg = snap.docs.find(d => d.data().id==='allocationTargets')
+      if (cfg) setTargets({ ...DEFAULT_ALLOCATION_TARGETS, ...(cfg.data().targets as Record<AccountClass, number>) })
+    } catch {}
+  }, [uid])
+
+  useEffect(() => { load() }, [load])
+
+  const save = async (next: Record<AccountClass, number>) => {
+    const snap = await getDocs(collection(db,'users',uid,'config'))
+    const cfg = snap.docs.find(d => d.data().id==='allocationTargets')
+    if (cfg) await deleteDoc(doc(db,'users',uid,'config',cfg.id))
+    await addDoc(collection(db,'users',uid,'config'), { id:'allocationTargets', targets: next, createdAt:Date.now() })
+    setTargets(next)
+  }
+
+  return { targets, save }
+}
+
+// ─── HELPERS ───────────────────────────────────────────────────────────────
 
 function deduplicateEntries(entries: AccountEntry[]): AccountEntry[] {
   const seen = new Set<string>()
@@ -253,7 +296,7 @@ function calcAportes(
     }, 0)
 }
 
-// â”€â”€â”€ SHARED COMPONENTS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── SHARED COMPONENTS ───────────────────────────────────────────────────────
 
 function CategoryInput({ value, onChange, savedCategories, placeholder }: {
   value: string
@@ -336,25 +379,10 @@ function getAllocationData(caixa: number, investimentos: number, external: numbe
   ].filter(item => item.value > 0)
 }
 
-type AccountClass = 'cash' | 'reserve' | 'fixed' | 'variable' | 'trading'
-
-const ACCOUNT_CLASS_LABELS: Record<AccountClass, string> = {
-  cash: 'Caixa',
-  reserve: 'Reserva',
-  fixed: 'Renda fixa',
-  variable: 'Variavel',
-  trading: 'Trading',
-}
-
-const DEFAULT_ALLOCATION_TARGETS: Record<AccountClass, number> = {
-  cash: 0,
-  reserve: 20,
-  fixed: 20,
-  variable: 40,
-  trading: 15,
-}
-
 function classifyAccount(name: string, configs: AccountConfig[]): AccountClass {
+  const cfg = configs.find(c => c.name === name)
+  if (cfg?.accountClass) return cfg.accountClass
+
   const n = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
 
   if (n.includes('reserva')) return 'reserve'
@@ -368,7 +396,7 @@ function classifyAccount(name: string, configs: AccountConfig[]): AccountClass {
   if (n.includes('clear') || n.includes('acoes') || n.includes('fii') || n.includes('b3')) return 'variable'
   if (n.includes('forex') || n.includes('prop') || n.includes('proprio')) return 'trading'
 
-  const cfgType = configs.find(c => c.name === name)?.type
+  const cfgType = cfg?.type
   if (cfgType === 'cash') return 'cash'
   if (cfgType === 'external') return 'trading'
   return 'fixed'
@@ -551,7 +579,7 @@ function FixedExpenseList({ fixedExpenses, isPaid, togglePaid, deleteFixed, edit
                     <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Nome</div>
                     <input style={S.input} value={editName} onChange={e => setEditName(e.target.value)} placeholder="Nome do gasto" />
                     <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
-                    <input style={S.input} type="number" inputMode="decimal" value={editAmt} onChange={e => setEditAmt(e.target.value)} placeholder="0,00" />
+                    <input style={S.input} type="text" inputMode="decimal" value={editAmt} onChange={e => setEditAmt(e.target.value)} placeholder="0,00" />
                     <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
                     <CategoryInput value={editCat} onChange={setEditCat} savedCategories={savedCats} placeholder="Categoria..." />
                     <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
@@ -588,8 +616,16 @@ function CategoriesManager({ uid, savedCats, onSave }: { uid: string; savedCats:
   }
 
   const save = async () => {
-    setSaving(true); await onSave(list)
-    setMsg('Salvo!'); setTimeout(() => setMsg(''),2000); setSaving(false)
+    setSaving(true)
+    try {
+      await onSave(list)
+      setMsg('Salvo!')
+    } catch {
+      setMsg('Erro ao salvar. Tente novamente.')
+    } finally {
+      setTimeout(() => setMsg(''),2500)
+      setSaving(false)
+    }
   }
 
   return (
@@ -610,13 +646,13 @@ function CategoriesManager({ uid, savedCats, onSave }: { uid: string; savedCats:
           <button onClick={add} style={{ padding:'12px 16px', background:'#13141A', border:'0.5px solid rgba(255,255,255,0.15)', borderRadius:12, color:'#4E9EFF', fontSize:18, cursor:'pointer' }}>+</button>
         </div>
       </div>
-      {msg && <div style={{ textAlign:'center', color:'#00E5A0', fontSize:13, margin:'8px 0' }}>{msg}</div>}
+      {msg && <div style={{ textAlign:'center', color:msg==='Salvo!'?'#00E5A0':'#E24B4A', fontSize:13, margin:'8px 0' }}>{msg}</div>}
       <button style={{ ...S.btn, opacity:saving?0.6:1 }} onClick={save} disabled={saving}>{saving?'Salvando...':'Salvar categorias'}</button>
     </div>
   )
 }
 
-// â”€â”€â”€ LOGIN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── LOGIN ─────────────────────────────────────────────────────────────────
 
 function LoginScreen() {
   const [email, setEmail] = useState('')
@@ -657,7 +693,7 @@ function LoginScreen() {
   )
 }
 
-// â”€â”€â”€ PAINEL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── PAINEL ────────────────────────────────────────────────────────────────
 
 function PainelScreen({ uid }: { uid: string }) {
   const [txs, setTxs] = useState<Transaction[]>([])
@@ -682,10 +718,15 @@ function PainelScreen({ uid }: { uid: string }) {
 
   useEffect(() => { load() }, [load])
 
-  const now = new Date()
+  // Usa o mesmo "mes de referencia" (com a folga de 5 dias) que as telas de
+  // Contas e Relatorio, em vez do mes de calendario puro. Antes, essa tela
+  // calculava receita/despesa do mes atual do calendario enquanto o
+  // patrimonio/rendimento abaixo usavam mk — nos primeiros dias do mes isso
+  // fazia os dois blocos mostrarem numeros de meses diferentes.
+  const [mkYear, mkMonthNum] = mk.split('-').map(Number)
   const thisMonthTxs = txs.filter(t => {
     const p = t.date.split('/')
-    return parseInt(p[1])===now.getMonth()+1 && parseInt(p[2])===now.getFullYear()
+    return parseInt(p[1])===mkMonthNum && parseInt(p[2])===mkYear
   })
 
   const totalReceita = thisMonthTxs.filter(t => t.type==='income').reduce((s,t) => s+t.value, 0)
@@ -698,20 +739,20 @@ function PainelScreen({ uid }: { uid: string }) {
   const varPatrimonio = patrimonioPrev > 0 ? ((patrimonio - patrimonioPrev) / patrimonioPrev) * 100 : 0
   const meta10pct = investimentosPrev * (10 / 12 / 100)
 
-  const [allocationTargets, setAllocationTargets] = useState<Record<AccountClass, number>>(() => {
-    try {
-      const saved = localStorage.getItem('financeAllocationTargets')
-      return saved ? { ...DEFAULT_ALLOCATION_TARGETS, ...JSON.parse(saved) } : DEFAULT_ALLOCATION_TARGETS
-    } catch {
-      return DEFAULT_ALLOCATION_TARGETS
-    }
-  })
+  // Metas de alocacao agora ficam no Firestore (antes eram so localStorage,
+  // e nao sincronizavam entre dispositivos). O debounce evita gravar a cada
+  // digito quando o usuario ajusta a meta no campo numerico.
+  const { targets: savedAllocationTargets, save: saveAllocationTargets } = useAllocationTargets(uid)
+  const [allocationTargets, setAllocationTargets] = useState<Record<AccountClass, number>>(savedAllocationTargets)
+  useEffect(() => { setAllocationTargets(savedAllocationTargets) }, [savedAllocationTargets])
+  const targetSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const updateAllocationTarget = (key: AccountClass, target: number) => {
     if (key === 'cash') return
     const next = { ...allocationTargets, [key]: target }
     setAllocationTargets(next)
-    localStorage.setItem('financeAllocationTargets', JSON.stringify(next))
+    if (targetSaveTimer.current) clearTimeout(targetSaveTimer.current)
+    targetSaveTimer.current = setTimeout(() => { saveAllocationTargets(next) }, 600)
   }
 
   const allocationData = buildAllocationData(entries, mk, configs, allocationTargets)
@@ -961,7 +1002,7 @@ function PainelScreen({ uid }: { uid: string }) {
   )
 }
 
-// â”€â”€â”€ GASTOS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── GASTOS ────────────────────────────────────────────────────────────────
 
 function GastosScreen({ uid }: { uid: string }) {
   const [tab, setTab] = useState<'add'|'fixos'|'list'|'cats'>('add')
@@ -1004,12 +1045,18 @@ function GastosScreen({ uid }: { uid: string }) {
     if (!v||v<=0||!desc.trim()) { setMsg('Preencha valor e descricao'); return }
     setSaving(true)
     const normalizedCat = (cat.trim()||'Outros').replace(/\b\w/g,c=>c.toUpperCase())
-    await Promise.all([
-      addDoc(collection(db,'users',uid,'transactions'), { type:'expense', value:v, description:desc.trim(), category:normalizedCat, account:conta, date:data, createdAt:Date.now() }),
-      addCategory(normalizedCat),
-    ])
-    setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
-    setTimeout(() => setMsg(''),2000); setSaving(false); load()
+    try {
+      await Promise.all([
+        addDoc(collection(db,'users',uid,'transactions'), { type:'expense', value:v, description:desc.trim(), category:normalizedCat, account:conta, date:data, createdAt:Date.now() }),
+        addCategory(normalizedCat),
+      ])
+      setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
+      load()
+    } catch {
+      setMsg('Erro ao salvar. Verifique sua conexao e tente novamente.')
+    } finally {
+      setTimeout(() => setMsg(''),2500); setSaving(false)
+    }
   }
 
   const deletar = async (id: string) => { await deleteDoc(doc(db,'users',uid,'transactions',id)); load() }
@@ -1017,30 +1064,49 @@ function GastosScreen({ uid }: { uid: string }) {
   const addFixed = async () => {
     const v = parseFloat(newFixAmt.replace(',','.'))
     if (!newFixName.trim()||!v||v<=0) { setFixMsg('Preencha nome e valor'); return }
-    await addDoc(collection(db,'users',uid,'fixedExpenses'), { name:newFixName.trim(), amount:v, category:newFixCat.trim()||'Fixo', account:newFixAccount||accountNames[0]||'', createdAt:Date.now() })
-    setNewFixName(''); setNewFixAmt(''); setNewFixCat(''); setNewFixAccount('')
-    setFixMsg('Adicionado!'); setTimeout(() => setFixMsg(''),2000); load()
+    try {
+      await addDoc(collection(db,'users',uid,'fixedExpenses'), { name:newFixName.trim(), amount:v, category:newFixCat.trim()||'Fixo', account:newFixAccount||accountNames[0]||'', createdAt:Date.now() })
+      setNewFixName(''); setNewFixAmt(''); setNewFixCat(''); setNewFixAccount('')
+      setFixMsg('Adicionado!')
+      load()
+    } catch {
+      setFixMsg('Erro ao adicionar. Tente novamente.')
+    } finally {
+      setTimeout(() => setFixMsg(''),2500)
+    }
   }
 
   const deleteFixed = async (id: string) => { await deleteDoc(doc(db,'users',uid,'fixedExpenses',id)); load() }
 
   const editFixed = async (id: string, fields: Partial<Omit<FixedExpense, 'id' | 'createdAt'>>) => {
-    await updateDoc(doc(db,'users',uid,'fixedExpenses',id), fields)
-    setFixMsg('Gasto fixo atualizado!'); setTimeout(() => setFixMsg(''),2500); load()
+    try {
+      await updateDoc(doc(db,'users',uid,'fixedExpenses',id), fields)
+      setFixMsg('Gasto fixo atualizado!')
+      load()
+    } catch {
+      setFixMsg('Erro ao atualizar. Tente novamente.')
+    } finally {
+      setTimeout(() => setFixMsg(''),2500)
+    }
   }
 
+  // Agora casa pelo id do gasto fixo (fixedExpenseId), nao mais so pelo texto
+  // "[FIXO] nome" — assim editar o nome de um gasto fixo depois de marcado
+  // como pago nao "perde" o status nem duplica o lancamento. Transacoes
+  // antigas (sem fixedExpenseId) ainda sao reconhecidas pelo texto, por
+  // compatibilidade.
   const isPaid = (fx: FixedExpense) => {
     const [y,m] = mk.split('-')
-    return txs.some(t => t.description===`[FIXO] ${fx.name}` && t.date.endsWith(`/${m}/${y}`) && t.type==='expense')
+    return txs.some(t => (t.fixedExpenseId===fx.id || t.description===`[FIXO] ${fx.name}`) && t.date.endsWith(`/${m}/${y}`) && t.type==='expense')
   }
 
   const togglePaid = async (fx: FixedExpense) => {
     const [y,m] = mk.split('-')
     if (isPaid(fx)) {
-      const tx = txs.find(t => t.description===`[FIXO] ${fx.name}` && t.date.endsWith(`/${m}/${y}`) && t.type==='expense')
+      const tx = txs.find(t => (t.fixedExpenseId===fx.id || t.description===`[FIXO] ${fx.name}`) && t.date.endsWith(`/${m}/${y}`) && t.type==='expense')
       if (tx) await deleteDoc(doc(db,'users',uid,'transactions',tx.id))
     } else {
-      await addDoc(collection(db,'users',uid,'transactions'), { type:'expense', value:fx.amount, description:`[FIXO] ${fx.name}`, category:fx.category, account:fx.account||accountNames[0]||'', date:`01/${m}/${y}`, createdAt:Date.now() })
+      await addDoc(collection(db,'users',uid,'transactions'), { type:'expense', value:fx.amount, description:`[FIXO] ${fx.name}`, category:fx.category, account:fx.account||accountNames[0]||'', date:`01/${m}/${y}`, createdAt:Date.now(), fixedExpenseId: fx.id })
     }
     load()
   }
@@ -1059,7 +1125,7 @@ function GastosScreen({ uid }: { uid: string }) {
       {tab==='add' && (
         <>
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
-          <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={valor} onChange={e => setValor(e.target.value)} />
+          <input style={S.input} type="text" inputMode="decimal" placeholder="0,00" value={valor} onChange={e => setValor(e.target.value)} />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Descricao</div>
           <input style={S.input} placeholder="Ex: Mercado, Uber..." value={desc} onChange={e => setDesc(e.target.value)} />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
@@ -1093,7 +1159,7 @@ function GastosScreen({ uid }: { uid: string }) {
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Nome</div>
             <input style={S.input} placeholder="Ex: Aluguel, Luz..." value={newFixName} onChange={e => setNewFixName(e.target.value)} />
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
-            <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={newFixAmt} onChange={e => setNewFixAmt(e.target.value)} />
+            <input style={S.input} type="text" inputMode="decimal" placeholder="0,00" value={newFixAmt} onChange={e => setNewFixAmt(e.target.value)} />
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
             <CategoryInput value={newFixCat} onChange={setNewFixCat} savedCategories={savedCats} placeholder="Ex: Moradia..." />
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
@@ -1119,7 +1185,7 @@ function GastosScreen({ uid }: { uid: string }) {
   )
 }
 
-// â”€â”€â”€ RECEITAS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── RECEITAS ──────────────────────────────────────────────────────────────
 
 function ReceitasScreen({ uid }: { uid: string }) {
   const [tab, setTab] = useState<'add'|'list'>('add')
@@ -1152,12 +1218,18 @@ function ReceitasScreen({ uid }: { uid: string }) {
     if (!v||v<=0||!desc.trim()) { setMsg('Preencha valor e descricao'); return }
     setSaving(true)
     const normalizedCat = (cat.trim()||'Receita').replace(/\b\w/g,c=>c.toUpperCase())
-    await Promise.all([
-      addDoc(collection(db,'users',uid,'transactions'), { type:'income', value:v, description:desc.trim(), category:normalizedCat, account:conta, date:data, createdAt:Date.now() }),
-      addCategory(normalizedCat),
-    ])
-    setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
-    setTimeout(() => setMsg(''),2000); setSaving(false); load()
+    try {
+      await Promise.all([
+        addDoc(collection(db,'users',uid,'transactions'), { type:'income', value:v, description:desc.trim(), category:normalizedCat, account:conta, date:data, createdAt:Date.now() }),
+        addCategory(normalizedCat),
+      ])
+      setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
+      load()
+    } catch {
+      setMsg('Erro ao salvar. Verifique sua conexao e tente novamente.')
+    } finally {
+      setTimeout(() => setMsg(''),2500); setSaving(false)
+    }
   }
 
   const deletar = async (id: string) => { await deleteDoc(doc(db,'users',uid,'transactions',id)); load() }
@@ -1181,7 +1253,7 @@ function ReceitasScreen({ uid }: { uid: string }) {
       {tab==='add' && (
         <>
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
-          <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={valor} onChange={e => setValor(e.target.value)} />
+          <input style={S.input} type="text" inputMode="decimal" placeholder="0,00" value={valor} onChange={e => setValor(e.target.value)} />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Descricao</div>
           <input style={S.input} placeholder="Ex: Salario, Lucro Prop Firm..." value={desc} onChange={e => setDesc(e.target.value)} />
           <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
@@ -1230,7 +1302,7 @@ function ReceitasScreen({ uid }: { uid: string }) {
   )
 }
 
-// â”€â”€â”€ TRANSFER HISTORY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── TRANSFER HISTORY ──────────────────────────────────────────────────────
 
 function TransferHistory({ transfers, configs, selectedMonth, onDelete, onUpdate }: {
   transfers: Transfer[]
@@ -1260,14 +1332,19 @@ function TransferHistory({ transfers, configs, selectedMonth, onDelete, onUpdate
     const v = parseFloat(editAmt.replace(',', '.'))
     if (!v || v <= 0 || !editFrom || !editTo || editFrom === editTo) return
     setSaving(true)
-    await onUpdate(id, {
-      amount: v,
-      fromAccount: editFrom,
-      toAccount: editTo,
-      description: editDesc.trim() || `${editFrom} -> ${editTo}`,
-    })
-    setSaving(false)
-    setEditingId(null)
+    try {
+      await onUpdate(id, {
+        amount: v,
+        fromAccount: editFrom,
+        toAccount: editTo,
+        description: editDesc.trim() || `${editFrom} -> ${editTo}`,
+      })
+      setEditingId(null)
+    } catch {
+      // mantem o formulario aberto para o usuario tentar novamente
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -1293,7 +1370,7 @@ function TransferHistory({ transfers, configs, selectedMonth, onDelete, onUpdate
                   {configs.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
                 </select>
                 <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Valor (R$)</div>
-                <input style={S.input} type="number" inputMode="decimal" value={editAmt} onChange={e => setEditAmt(e.target.value)} />
+                <input style={S.input} type="text" inputMode="decimal" value={editAmt} onChange={e => setEditAmt(e.target.value)} />
                 <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Descricao</div>
                 <input style={{ ...S.input, marginBottom: 0 }} value={editDesc} onChange={e => setEditDesc(e.target.value)} />
                 <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
@@ -1354,7 +1431,7 @@ function TransferHistory({ transfers, configs, selectedMonth, onDelete, onUpdate
   )
 }
 
-// â”€â”€â”€ CONTAS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── CONTAS ────────────────────────────────────────────────────────────────
 
 function ContasScreen({ uid }: { uid: string }) {
   const allMonths = generateMonths()
@@ -1368,6 +1445,7 @@ function ContasScreen({ uid }: { uid: string }) {
   const [editConfigs, setEditConfigs] = useState<AccountConfig[]>([])
   const [newAccName, setNewAccName] = useState('')
   const [newAccType, setNewAccType] = useState<AccountType>('cash')
+  const [newAccClass, setNewAccClass] = useState<AccountClass | ''>('')
   const [showTransfer, setShowTransfer] = useState(false)
   const [trFrom, setTrFrom] = useState('')
   const [trTo, setTrTo] = useState('')
@@ -1396,32 +1474,51 @@ function ContasScreen({ uid }: { uid: string }) {
 
   const salvar = async () => {
     setSaving(true)
-    const curr = entries.filter(e => e.month===selectedMonth)
-    await Promise.all(curr.map(e => deleteDoc(doc(db,'users',uid,'accountEntries',e.id))))
-    await Promise.all(
-      configs.map(cfg => {
-        const v = parseFloat(balances[cfg.name]?.replace(',','.')||'0')
-        if (isNaN(v)||v===0) return Promise.resolve()
-        return addDoc(collection(db,'users',uid,'accountEntries'), { account:cfg.name, accountType:cfg.type, balance:v, month:selectedMonth, createdAt:Date.now() })
-      }).filter(Boolean)
-    )
-    setMsg('Saldos salvos!'); setTimeout(() => setMsg(''),2500); setSaving(false); load()
+    try {
+      const curr = entries.filter(e => e.month===selectedMonth)
+      await Promise.all(curr.map(e => deleteDoc(doc(db,'users',uid,'accountEntries',e.id))))
+      await Promise.all(
+        configs.map(cfg => {
+          const v = parseFloat(balances[cfg.name]?.replace(',','.')||'0')
+          if (isNaN(v)||v===0) return Promise.resolve()
+          return addDoc(collection(db,'users',uid,'accountEntries'), { account:cfg.name, accountType:cfg.type, balance:v, month:selectedMonth, createdAt:Date.now() })
+        }).filter(Boolean)
+      )
+      setMsg('Saldos salvos!')
+      load()
+    } catch {
+      setMsg('Erro ao salvar. Verifique sua conexao e tente novamente.')
+    } finally {
+      setTimeout(() => setMsg(''),2500); setSaving(false)
+    }
   }
 
   const saveAccountEdits = async () => {
     const cleaned = editConfigs.filter(c => c.name.trim())
-    if (newAccName.trim()) cleaned.push({ name:newAccName.trim(), type:newAccType })
-    await saveConfigs(cleaned)
-    setNewAccName(''); setEditMode(false)
-    setMsg('Contas atualizadas!'); setTimeout(() => setMsg(''),2000)
+    if (newAccName.trim()) cleaned.push({ name:newAccName.trim(), type:newAccType, accountClass: newAccClass || undefined })
+    try {
+      await saveConfigs(cleaned)
+      setNewAccName(''); setNewAccClass(''); setEditMode(false)
+      setMsg('Contas atualizadas!')
+    } catch {
+      setMsg('Erro ao atualizar contas. Tente novamente.')
+    } finally {
+      setTimeout(() => setMsg(''),2500)
+    }
   }
 
   const addTransfer = async () => {
     const v = parseFloat(trAmt.replace(',','.'))
     if (!v||v<=0||!trFrom||!trTo||trFrom===trTo) { setTrMsg('Preencha todos os campos'); return }
-    await addDoc(collection(db,'users',uid,'transfers'), { amount:v, fromAccount:trFrom, toAccount:trTo, month:selectedMonth, description:trDesc.trim()||`${trFrom} -> ${trTo}`, createdAt:Date.now() })
-    setTrAmt(''); setTrDesc(''); setTrMsg('Transferencia registrada!')
-    setTimeout(() => { setTrMsg(''); setShowTransfer(false) }, 2000); load()
+    try {
+      await addDoc(collection(db,'users',uid,'transfers'), { amount:v, fromAccount:trFrom, toAccount:trTo, month:selectedMonth, description:trDesc.trim()||`${trFrom} -> ${trTo}`, createdAt:Date.now() })
+      setTrAmt(''); setTrDesc(''); setTrMsg('Transferencia registrada!')
+      setTimeout(() => { setTrMsg(''); setShowTransfer(false) }, 2000)
+      load()
+    } catch {
+      setTrMsg('Erro ao registrar. Tente novamente.')
+      setTimeout(() => setTrMsg(''), 2500)
+    }
   }
 
   const deleteTransfer = async (id: string) => {
@@ -1472,24 +1569,44 @@ function ContasScreen({ uid }: { uid: string }) {
         <div style={S.card}>
           <div style={{ ...S.label, marginBottom:12 }}>Gerenciar contas</div>
           {editConfigs.map((cfg,i) => (
-            <div key={i} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
-              <input style={{ ...S.input, marginBottom:0, flex:2 }} value={cfg.name} onChange={e => setEditConfigs(prev => prev.map((c,idx) => idx===i?{...c,name:e.target.value}:c))} />
-              <select style={{ ...S.select, marginBottom:0, flex:1, fontSize:12 }} value={cfg.type} onChange={e => setEditConfigs(prev => prev.map((c,idx) => idx===i?{...c,type:e.target.value as AccountType}:c))}>
-                <option value="cash">Caixa</option>
-                <option value="investment">Invest.</option>
-                <option value="external">Trading</option>
-              </select>
-              <button onClick={() => setEditConfigs(prev => prev.filter((_,idx) => idx!==i))} style={{ background:'none', border:'none', color:'#E24B4A', cursor:'pointer', fontSize:18, flexShrink:0 }}>x</button>
+            <div key={i} style={{ marginBottom:12, paddingBottom:12, borderBottom:'0.5px solid rgba(255,255,255,0.06)' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6 }}>
+                <input style={{ ...S.input, marginBottom:0, flex:1 }} value={cfg.name} onChange={e => setEditConfigs(prev => prev.map((c,idx) => idx===i?{...c,name:e.target.value}:c))} />
+                <button onClick={() => setEditConfigs(prev => prev.filter((_,idx) => idx!==i))} style={{ background:'none', border:'none', color:'#E24B4A', cursor:'pointer', fontSize:18, flexShrink:0 }}>x</button>
+              </div>
+              <div style={{ display:'flex', gap:8 }}>
+                <select style={{ ...S.select, marginBottom:0, flex:1, fontSize:12 }} value={cfg.type} onChange={e => setEditConfigs(prev => prev.map((c,idx) => idx===i?{...c,type:e.target.value as AccountType}:c))}>
+                  <option value="cash">Caixa</option>
+                  <option value="investment">Invest.</option>
+                  <option value="external">Trading</option>
+                </select>
+                <select style={{ ...S.select, marginBottom:0, flex:1, fontSize:12 }} value={cfg.accountClass ?? ''} onChange={e => setEditConfigs(prev => prev.map((c,idx) => idx===i?{...c,accountClass:(e.target.value || undefined) as AccountClass|undefined}:c))}>
+                  <option value="">Classe (auto)</option>
+                  <option value="cash">Caixa</option>
+                  <option value="reserve">Reserva</option>
+                  <option value="fixed">Renda fixa</option>
+                  <option value="variable">Variavel</option>
+                  <option value="trading">Trading</option>
+                </select>
+              </div>
             </div>
           ))}
           <div style={{ borderTop:'0.5px solid rgba(255,255,255,0.08)', paddingTop:12, marginTop:8 }}>
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:6 }}>+ Nova conta</div>
+            <input style={S.input} placeholder="Nome..." value={newAccName} onChange={e => setNewAccName(e.target.value)} />
             <div style={{ display:'flex', gap:8 }}>
-              <input style={{ ...S.input, marginBottom:0, flex:2 }} placeholder="Nome..." value={newAccName} onChange={e => setNewAccName(e.target.value)} />
               <select style={{ ...S.select, marginBottom:0, flex:1, fontSize:12 }} value={newAccType} onChange={e => setNewAccType(e.target.value as AccountType)}>
                 <option value="cash">Caixa</option>
                 <option value="investment">Invest.</option>
                 <option value="external">Trading</option>
+              </select>
+              <select style={{ ...S.select, marginBottom:0, flex:1, fontSize:12 }} value={newAccClass} onChange={e => setNewAccClass(e.target.value as AccountClass | '')}>
+                <option value="">Classe (auto)</option>
+                <option value="cash">Caixa</option>
+                <option value="reserve">Reserva</option>
+                <option value="fixed">Renda fixa</option>
+                <option value="variable">Variavel</option>
+                <option value="trading">Trading</option>
               </select>
             </div>
           </div>
@@ -1508,7 +1625,7 @@ function ContasScreen({ uid }: { uid: string }) {
             />
           </div>
 
-          {/* GrÃ¡fico */}
+          {/* Grafico */}
           {chartData.length>1 && (
             <div style={{ ...S.card, marginBottom:12 }}>
               <div style={S.label}>Historico</div>
@@ -1531,12 +1648,12 @@ function ContasScreen({ uid }: { uid: string }) {
             </div>
           )}
 
-          {/* BotÃ£o de transferÃªncia */}
+          {/* Botao de transferencia */}
           <button onClick={() => setShowTransfer(!showTransfer)} style={{ ...S.btnGhost, marginTop:0, marginBottom:10, fontSize:12 }}>
             {showTransfer ? 'Cancelar transferencia' : '+ Registrar transferencia entre contas'}
           </button>
 
-          {/* FormulÃ¡rio de transferÃªncia */}
+          {/* Formulario de transferencia */}
           {showTransfer && (
             <div style={{ ...S.card, marginBottom:12 }}>
               <div style={{ ...S.label, marginBottom:10 }}>Transferencia</div>
@@ -1551,7 +1668,7 @@ function ContasScreen({ uid }: { uid: string }) {
                 {configs.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
               </select>
               <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
-              <input style={S.input} type="number" inputMode="decimal" placeholder="0,00" value={trAmt} onChange={e => setTrAmt(e.target.value)} />
+              <input style={S.input} type="text" inputMode="decimal" placeholder="0,00" value={trAmt} onChange={e => setTrAmt(e.target.value)} />
               <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Descricao (opcional)</div>
               <input style={{ ...S.input, marginBottom:0 }} placeholder="Ex: Aporte renda fixa..." value={trDesc} onChange={e => setTrDesc(e.target.value)} />
               {trMsg && <div style={{ textAlign:'center', color:'#00E5A0', fontSize:12, margin:'8px 0' }}>{trMsg}</div>}
@@ -1559,7 +1676,7 @@ function ContasScreen({ uid }: { uid: string }) {
             </div>
           )}
 
-          {/* HistÃ³rico de transferÃªncias */}
+          {/* Historico de transferencias */}
           {monthTransfers.length > 0 && (
             <TransferHistory
               transfers={monthTransfers}
@@ -1593,7 +1710,7 @@ function ContasScreen({ uid }: { uid: string }) {
                             <div style={{ fontSize:13, fontWeight:500 }}>{cfg.name}</div>
                             {delta!==null && <div style={{ fontSize:11, color:delta>=0?'#00E5A0':'#E24B4A' }}>{delta>=0?'+':''}{fmt(delta)}</div>}
                           </div>
-                          <input style={{ ...S.input, marginBottom:0 }} type="number" inputMode="decimal" placeholder="0,00"
+                          <input style={{ ...S.input, marginBottom:0 }} type="text" inputMode="decimal" placeholder="0,00"
                             value={balances[cfg.name]||''}
                             onChange={e => setBalances(prev => ({...prev,[cfg.name]:e.target.value}))} />
                           {prev!==undefined && <div style={{ fontSize:10, color:'rgba(255,255,255,0.25)', marginTop:2 }}>Anterior: {fmt(prev)}</div>}
@@ -1614,7 +1731,7 @@ function ContasScreen({ uid }: { uid: string }) {
   )
 }
 
-// â”€â”€â”€ RELATÃ“RIO â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── RELATÓRIO ─────────────────────────────────────────────────────────────
 
 function RelatorioScreen({ uid }: { uid: string }) {
   const [txs, setTxs] = useState<Transaction[]>([])
@@ -1720,7 +1837,7 @@ ${mTxs.map(t => `${t.type==='income'?'+':'-'} ${fmt(t.value)} | ${t.description}
   )
 }
 
-// â”€â”€â”€ NAV â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── NAV ───────────────────────────────────────────────────────────────────
 
 const navIcons: Record<string,string> = {
   painel:'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z',
@@ -1734,7 +1851,7 @@ const NavIcon = ({ type }: { type: string }) => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d={navIcons[type]} /></svg>
 )
 
-// â”€â”€â”€ APP ROOT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── APP ROOT ──────────────────────────────────────────────────────────────
 
 type Screen = 'painel'|'gastos'|'receitas'|'contas'|'relatorio'
 
