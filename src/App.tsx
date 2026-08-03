@@ -18,6 +18,7 @@ export interface Transaction {
   description: string
   category: string
   account: string
+  accountId?: string
   date: string
   createdAt: number
   fixedExpenseId?: string
@@ -26,6 +27,7 @@ export interface Transaction {
 export interface AccountEntry {
   id: string
   account: string
+  accountId?: string
   accountType: AccountType
   balance: number
   month: string
@@ -33,9 +35,11 @@ export interface AccountEntry {
 }
 
 export interface AccountConfig {
+  id: string
   name: string
   type: AccountType
   accountClass?: AccountClass
+  archived?: boolean
 }
 
 export interface Transfer {
@@ -43,6 +47,8 @@ export interface Transfer {
   amount: number
   fromAccount: string
   toAccount: string
+  fromAccountId?: string
+  toAccountId?: string
   month: string
   description: string
   createdAt: number
@@ -54,6 +60,7 @@ export interface FixedExpense {
   amount: number
   category: string
   account: string
+  accountId?: string
   createdAt: number
 }
 
@@ -85,6 +92,11 @@ const DEFAULT_ALLOCATION_TARGETS: Record<AccountClass, number> = {
   fixed: 20,
   variable: 40,
   trading: 15,
+}
+
+const generateAccountId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  return `acc_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
 }
 
 const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -150,16 +162,6 @@ const S = {
 function useAccountConfigs(uid: string) {
   const [configs, setConfigs] = useState<AccountConfig[]>([])
 
-  const load = useCallback(async () => {
-    try {
-      const snap = await getDocs(collection(db,'users',uid,'config'))
-      const cfg = snap.docs.find(d => d.data().id==='accountConfigs')
-      if (cfg) setConfigs(cfg.data().list as AccountConfig[])
-    } catch {}
-  }, [uid])
-
-  useEffect(() => { load() }, [load])
-
   const save = async (list: AccountConfig[]) => {
     const snap = await getDocs(collection(db,'users',uid,'config'))
     const cfg = snap.docs.find(d => d.data().id==='accountConfigs')
@@ -167,6 +169,28 @@ function useAccountConfigs(uid: string) {
     await addDoc(collection(db,'users',uid,'config'), { id:'accountConfigs', list, createdAt:Date.now() })
     setConfigs(list)
   }
+
+  const load = useCallback(async () => {
+    try {
+      const snap = await getDocs(collection(db,'users',uid,'config'))
+      const cfg = snap.docs.find(d => d.data().id==='accountConfigs')
+      if (cfg) {
+        const list = cfg.data().list as AccountConfig[]
+        const needsMigration = list.some(c => !c.id)
+        const migrated = list.map(c => c.id ? c : { ...c, id: generateAccountId() })
+        setConfigs(migrated)
+        if (needsMigration) {
+          // Contas criadas antes de existir o id ganham um id estavel uma
+          // unica vez aqui, sem exigir nenhuma acao do usuario. A partir
+          // disso, renomear uma conta nao perde mais o vinculo com o
+          // historico de saldos/lancamentos dela.
+          await save(migrated)
+        }
+      }
+    } catch {}
+  }, [uid])
+
+  useEffect(() => { load() }, [load])
 
   const getType = (name: string): AccountType => {
     return configs.find(c => c.name===name)?.type ?? 'cash'
@@ -241,24 +265,55 @@ function deduplicateEntries(entries: AccountEntry[]): AccountEntry[] {
   })
 }
 
+// Resolve a config de uma conta a partir de uma referencia { account, accountId }.
+// Prioriza o id (estavel mesmo apos renomear); cai para o nome soh em
+// registros antigos, gravados antes do id existir.
+function resolveAccountConfig(ref: { account: string; accountId?: string }, configs: AccountConfig[]): AccountConfig | undefined {
+  if (ref.accountId) {
+    const byId = configs.find(c => c.id === ref.accountId)
+    if (byId) return byId
+  }
+  return configs.find(c => c.name === ref.account)
+}
+
+function entryMatchesAccount(e: { account: string; accountId?: string }, cfg: AccountConfig): boolean {
+  if (e.accountId) return e.accountId === cfg.id
+  return e.account === cfg.name
+}
+
+// Saldo de uma conta num mes: usa o lancamento exato daquele mes quando
+// existe. Se a conta estiver oculta (archived) e nao houver lancamento no
+// mes (porque ela parou de aparecer no formulario mensal), usa o ultimo
+// saldo conhecido em vez de tratar como zero — assim ocultar uma conta nao
+// derruba o patrimonio do mes seguinte.
+function balanceForMonth(entries: AccountEntry[], cfg: AccountConfig, month: string): number {
+  const exact = entries.find(e => e.month === month && entryMatchesAccount(e, cfg))
+  if (exact) return exact.balance
+  if (!cfg.archived) return 0
+  const prior = entries
+    .filter(e => entryMatchesAccount(e, cfg) && e.month <= month)
+    .sort((a, b) => b.month.localeCompare(a.month))[0]
+  return prior ? prior.balance : 0
+}
+
 function calcPatrimonio(entries: AccountEntry[], month: string, validAccounts: AccountConfig[]) {
-  const validNames = validAccounts.filter(a => a.type !== 'external').map(a => a.name)
-  return entries.filter(e => e.month===month && validNames.includes(e.account)).reduce((s,e) => s+e.balance, 0)
+  return validAccounts.filter(a => a.type !== 'external').reduce((s, cfg) => s + balanceForMonth(entries, cfg, month), 0)
 }
 
 function calcInvestimentos(entries: AccountEntry[], month: string, validAccounts: AccountConfig[]) {
-  const invNames = validAccounts.filter(a => a.type==='investment').map(a => a.name)
-  return entries.filter(e => e.month===month && invNames.includes(e.account)).reduce((s,e) => s+e.balance, 0)
+  return validAccounts.filter(a => a.type==='investment').reduce((s, cfg) => s + balanceForMonth(entries, cfg, month), 0)
 }
 
 function calcCaixa(entries: AccountEntry[], month: string, validAccounts: AccountConfig[]) {
-  const cashNames = validAccounts.filter(a => a.type==='cash').map(a => a.name)
-  return entries.filter(e => e.month===month && cashNames.includes(e.account)).reduce((s,e) => s+e.balance, 0)
+  return validAccounts.filter(a => a.type==='cash').reduce((s, cfg) => s + balanceForMonth(entries, cfg, month), 0)
 }
 
 function calcExternal(entries: AccountEntry[], month: string, validAccounts: AccountConfig[]) {
-  const extNames = validAccounts.filter(a => a.type==='external').map(a => a.name)
-  return entries.filter(e => e.month===month && extNames.includes(e.account)).reduce((s,e) => s+e.balance, 0)
+  return validAccounts.filter(a => a.type==='external').reduce((s, cfg) => s + balanceForMonth(entries, cfg, month), 0)
+}
+
+function isInvestmentTransferRef(account: string, accountId: string | undefined, invConfigs: AccountConfig[]): boolean {
+  return invConfigs.some(cfg => (accountId ? accountId === cfg.id : account === cfg.name))
 }
 
 function calcRendimento(
@@ -270,12 +325,14 @@ function calcRendimento(
 ) {
   const invAtual = calcInvestimentos(entries, month, validAccounts)
   const invAnterior = calcInvestimentos(entries, pmk, validAccounts)
-  const invNames = validAccounts.filter(a => a.type==='investment').map(a => a.name)
+  const invConfigs = validAccounts.filter(a => a.type==='investment')
   const aportes = transfers
     .filter(t => t.month===month)
     .reduce((s, t) => {
-      if (invNames.includes(t.toAccount) && !invNames.includes(t.fromAccount)) return s + t.amount
-      if (invNames.includes(t.fromAccount) && !invNames.includes(t.toAccount)) return s - t.amount
+      const toInv = isInvestmentTransferRef(t.toAccount, t.toAccountId, invConfigs)
+      const fromInv = isInvestmentTransferRef(t.fromAccount, t.fromAccountId, invConfigs)
+      if (toInv && !fromInv) return s + t.amount
+      if (fromInv && !toInv) return s - t.amount
       return s
     }, 0)
   return invAtual - invAnterior - aportes
@@ -286,12 +343,14 @@ function calcAportes(
   month: string,
   validAccounts: AccountConfig[]
 ) {
-  const invNames = validAccounts.filter(a => a.type === 'investment').map(a => a.name)
+  const invConfigs = validAccounts.filter(a => a.type === 'investment')
   return transfers
     .filter(t => t.month === month)
     .reduce((s, t) => {
-      if (invNames.includes(t.toAccount) && !invNames.includes(t.fromAccount)) return s + t.amount
-      if (invNames.includes(t.fromAccount) && !invNames.includes(t.toAccount)) return s - t.amount
+      const toInv = isInvestmentTransferRef(t.toAccount, t.toAccountId, invConfigs)
+      const fromInv = isInvestmentTransferRef(t.fromAccount, t.fromAccountId, invConfigs)
+      if (toInv && !fromInv) return s + t.amount
+      if (fromInv && !toInv) return s - t.amount
       return s
     }, 0)
 }
@@ -379,11 +438,11 @@ function getAllocationData(caixa: number, investimentos: number, external: numbe
   ].filter(item => item.value > 0)
 }
 
-function classifyAccount(name: string, configs: AccountConfig[]): AccountClass {
-  const cfg = configs.find(c => c.name === name)
+function classifyAccount(ref: { account: string; accountId?: string }, configs: AccountConfig[]): AccountClass {
+  const cfg = resolveAccountConfig(ref, configs)
   if (cfg?.accountClass) return cfg.accountClass
 
-  const n = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  const n = ref.account.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
 
   if (n.includes('reserva')) return 'reserve'
   if (
@@ -406,7 +465,7 @@ function buildAllocationData(entries: AccountEntry[], month: string, configs: Ac
   const totals = entries
     .filter(e => e.month === month)
     .reduce((acc, entry) => {
-      const type = classifyAccount(entry.account, configs)
+      const type = classifyAccount(entry, configs)
       acc[type] = (acc[type] ?? 0) + entry.balance
       return acc
     }, {} as Record<AccountClass, number>)
@@ -513,13 +572,13 @@ function AllocationCard({ caixa, investimentos, external, data: customData, comp
   )
 }
 
-function FixedExpenseList({ fixedExpenses, isPaid, togglePaid, deleteFixed, editFixed, accountNames, savedCats }: {
+function FixedExpenseList({ fixedExpenses, isPaid, togglePaid, deleteFixed, editFixed, configs, savedCats }: {
   fixedExpenses: FixedExpense[]
   isPaid: (fx: FixedExpense) => boolean
   togglePaid: (fx: FixedExpense) => void
   deleteFixed: (id: string) => void
   editFixed: (id: string, fields: Partial<Omit<FixedExpense, 'id' | 'createdAt'>>) => Promise<void>
-  accountNames: string[]
+  configs: AccountConfig[]
   savedCats: string[]
 }) {
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -528,6 +587,10 @@ function FixedExpenseList({ fixedExpenses, isPaid, togglePaid, deleteFixed, edit
   const [editCat, setEditCat] = useState('')
   const [editAccount, setEditAccount] = useState('')
   const [saving, setSaving] = useState(false)
+
+  // Inclui contas ocultas aqui (diferente do formulario de "adicionar"),
+  // pra nao sumir a conta de um gasto fixo antigo que ja foi arquivada.
+  const accountNames = configs.map(c => c.name)
 
   const startEdit = (fx: FixedExpense) => {
     setEditingId(fx.id)
@@ -543,7 +606,8 @@ function FixedExpenseList({ fixedExpenses, isPaid, togglePaid, deleteFixed, edit
     const v = parseFloat(editAmt.replace(',', '.'))
     if (!editName.trim() || !v || v <= 0) return
     setSaving(true)
-    await editFixed(id, { name: editName.trim(), amount: v, category: editCat.trim() || 'Fixo', account: editAccount })
+    const accCfg = configs.find(c => c.name === editAccount)
+    await editFixed(id, { name: editName.trim(), amount: v, category: editCat.trim() || 'Fixo', account: editAccount, accountId: accCfg?.id })
     setSaving(false)
     setEditingId(null)
   }
@@ -1025,7 +1089,10 @@ function GastosScreen({ uid }: { uid: string }) {
   const { categories: savedCats, saveCategories, addCategory } = useCategories(uid)
   const mk = currentMonthKey()
 
-  const accountNames = configs.map(c => c.name)
+  // So contas ativas entram nos formularios de novo lancamento. As ocultas
+  // continuam existindo em configs (com historico intacto), so nao aparecem
+  // aqui pra nao serem escolhidas por engano.
+  const accountNames = configs.filter(c => !c.archived).map(c => c.name)
 
   const load = useCallback(async () => {
     const [txSnap, fxSnap] = await Promise.all([
@@ -1046,8 +1113,9 @@ function GastosScreen({ uid }: { uid: string }) {
     setSaving(true)
     const normalizedCat = (cat.trim()||'Outros').replace(/\b\w/g,c=>c.toUpperCase())
     try {
+      const contaCfg = configs.find(c => c.name === conta)
       await Promise.all([
-        addDoc(collection(db,'users',uid,'transactions'), { type:'expense', value:v, description:desc.trim(), category:normalizedCat, account:conta, date:data, createdAt:Date.now() }),
+        addDoc(collection(db,'users',uid,'transactions'), { type:'expense', value:v, description:desc.trim(), category:normalizedCat, account:conta, accountId:contaCfg?.id, date:data, createdAt:Date.now() }),
         addCategory(normalizedCat),
       ])
       setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
@@ -1065,7 +1133,9 @@ function GastosScreen({ uid }: { uid: string }) {
     const v = parseFloat(newFixAmt.replace(',','.'))
     if (!newFixName.trim()||!v||v<=0) { setFixMsg('Preencha nome e valor'); return }
     try {
-      await addDoc(collection(db,'users',uid,'fixedExpenses'), { name:newFixName.trim(), amount:v, category:newFixCat.trim()||'Fixo', account:newFixAccount||accountNames[0]||'', createdAt:Date.now() })
+      const fixAccName = newFixAccount||accountNames[0]||''
+      const fixAccCfg = configs.find(c => c.name === fixAccName)
+      await addDoc(collection(db,'users',uid,'fixedExpenses'), { name:newFixName.trim(), amount:v, category:newFixCat.trim()||'Fixo', account:fixAccName, accountId:fixAccCfg?.id, createdAt:Date.now() })
       setNewFixName(''); setNewFixAmt(''); setNewFixCat(''); setNewFixAccount('')
       setFixMsg('Adicionado!')
       load()
@@ -1106,7 +1176,9 @@ function GastosScreen({ uid }: { uid: string }) {
       const tx = txs.find(t => (t.fixedExpenseId===fx.id || t.description===`[FIXO] ${fx.name}`) && t.date.endsWith(`/${m}/${y}`) && t.type==='expense')
       if (tx) await deleteDoc(doc(db,'users',uid,'transactions',tx.id))
     } else {
-      await addDoc(collection(db,'users',uid,'transactions'), { type:'expense', value:fx.amount, description:`[FIXO] ${fx.name}`, category:fx.category, account:fx.account||accountNames[0]||'', date:`01/${m}/${y}`, createdAt:Date.now(), fixedExpenseId: fx.id })
+      const fxAccName = fx.account||accountNames[0]||''
+      const fxAccId = fx.accountId ?? configs.find(c => c.name === fxAccName)?.id
+      await addDoc(collection(db,'users',uid,'transactions'), { type:'expense', value:fx.amount, description:`[FIXO] ${fx.name}`, category:fx.category, account:fxAccName, accountId:fxAccId, date:`01/${m}/${y}`, createdAt:Date.now(), fixedExpenseId: fx.id })
     }
     load()
   }
@@ -1147,7 +1219,7 @@ function GastosScreen({ uid }: { uid: string }) {
           {fixedExpenses.length===0
             ? <div style={{ ...S.muted, textAlign:'center', padding:'16px 0' }}>Nenhum gasto fixo cadastrado</div>
             : <div style={S.card}>
-                <FixedExpenseList fixedExpenses={fixedExpenses} isPaid={isPaid} togglePaid={togglePaid} deleteFixed={deleteFixed} editFixed={editFixed} accountNames={accountNames} savedCats={savedCats} />
+                <FixedExpenseList fixedExpenses={fixedExpenses} isPaid={isPaid} togglePaid={togglePaid} deleteFixed={deleteFixed} editFixed={editFixed} configs={configs} savedCats={savedCats} />
                 <div style={{ paddingTop:10, borderTop:'0.5px solid rgba(255,255,255,0.08)', display:'flex', justifyContent:'space-between' }}>
                   <div style={S.muted}>Total</div>
                   <div style={{ fontSize:13, fontWeight:500 }}>{fmt(fixedExpenses.reduce((s,f) => s+f.amount,0))}</div>
@@ -1202,7 +1274,7 @@ function ReceitasScreen({ uid }: { uid: string }) {
   const allMonths = generateMonths()
   const { configs } = useAccountConfigs(uid)
   const { categories: savedCats, addCategory } = useCategories(uid)
-  const accountNames = configs.map(c => c.name)
+  const accountNames = configs.filter(c => !c.archived).map(c => c.name)
 
   const load = useCallback(async () => {
     const snap = await getDocs(query(collection(db,'users',uid,'transactions'), orderBy('createdAt','desc')))
@@ -1219,8 +1291,9 @@ function ReceitasScreen({ uid }: { uid: string }) {
     setSaving(true)
     const normalizedCat = (cat.trim()||'Receita').replace(/\b\w/g,c=>c.toUpperCase())
     try {
+      const contaCfg = configs.find(c => c.name === conta)
       await Promise.all([
-        addDoc(collection(db,'users',uid,'transactions'), { type:'income', value:v, description:desc.trim(), category:normalizedCat, account:conta, date:data, createdAt:Date.now() }),
+        addDoc(collection(db,'users',uid,'transactions'), { type:'income', value:v, description:desc.trim(), category:normalizedCat, account:conta, accountId:contaCfg?.id, date:data, createdAt:Date.now() }),
         addCategory(normalizedCat),
       ])
       setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
@@ -1332,11 +1405,15 @@ function TransferHistory({ transfers, configs, selectedMonth, onDelete, onUpdate
     const v = parseFloat(editAmt.replace(',', '.'))
     if (!v || v <= 0 || !editFrom || !editTo || editFrom === editTo) return
     setSaving(true)
+    const fromCfg = configs.find(c => c.name === editFrom)
+    const toCfg = configs.find(c => c.name === editTo)
     try {
       await onUpdate(id, {
         amount: v,
         fromAccount: editFrom,
         toAccount: editTo,
+        fromAccountId: fromCfg?.id,
+        toAccountId: toCfg?.id,
         description: editDesc.trim() || `${editFrom} -> ${editTo}`,
       })
       setEditingId(null)
@@ -1465,9 +1542,12 @@ function ContasScreen({ uid }: { uid: string }) {
     setTransfers(trSnap.docs.map(d => ({id:d.id,...d.data()} as Transfer)))
     const current = deduplicateEntries(raw).filter(e => e.month===selectedMonth)
     const init: Record<string,string> = {}
-    current.forEach(e => { init[e.account]=String(e.balance) })
+    current.forEach(e => {
+      const cfg = resolveAccountConfig(e, configs)
+      init[cfg ? cfg.name : e.account] = String(e.balance)
+    })
     setBalances(init)
-  }, [uid, selectedMonth])
+  }, [uid, selectedMonth, configs])
 
   useEffect(() => { load() }, [load])
   useEffect(() => { setEditConfigs([...configs]) }, [configs])
@@ -1481,7 +1561,7 @@ function ContasScreen({ uid }: { uid: string }) {
         configs.map(cfg => {
           const v = parseFloat(balances[cfg.name]?.replace(',','.')||'0')
           if (isNaN(v)||v===0) return Promise.resolve()
-          return addDoc(collection(db,'users',uid,'accountEntries'), { account:cfg.name, accountType:cfg.type, balance:v, month:selectedMonth, createdAt:Date.now() })
+          return addDoc(collection(db,'users',uid,'accountEntries'), { account:cfg.name, accountId:cfg.id, accountType:cfg.type, balance:v, month:selectedMonth, createdAt:Date.now() })
         }).filter(Boolean)
       )
       setMsg('Saldos salvos!')
@@ -1495,7 +1575,7 @@ function ContasScreen({ uid }: { uid: string }) {
 
   const saveAccountEdits = async () => {
     const cleaned = editConfigs.filter(c => c.name.trim())
-    if (newAccName.trim()) cleaned.push({ name:newAccName.trim(), type:newAccType, accountClass: newAccClass || undefined })
+    if (newAccName.trim()) cleaned.push({ id: generateAccountId(), name:newAccName.trim(), type:newAccType, accountClass: newAccClass || undefined })
     try {
       await saveConfigs(cleaned)
       setNewAccName(''); setNewAccClass(''); setEditMode(false)
@@ -1511,7 +1591,9 @@ function ContasScreen({ uid }: { uid: string }) {
     const v = parseFloat(trAmt.replace(',','.'))
     if (!v||v<=0||!trFrom||!trTo||trFrom===trTo) { setTrMsg('Preencha todos os campos'); return }
     try {
-      await addDoc(collection(db,'users',uid,'transfers'), { amount:v, fromAccount:trFrom, toAccount:trTo, month:selectedMonth, description:trDesc.trim()||`${trFrom} -> ${trTo}`, createdAt:Date.now() })
+      const fromCfg = configs.find(c => c.name === trFrom)
+      const toCfg = configs.find(c => c.name === trTo)
+      await addDoc(collection(db,'users',uid,'transfers'), { amount:v, fromAccount:trFrom, toAccount:trTo, fromAccountId:fromCfg?.id, toAccountId:toCfg?.id, month:selectedMonth, description:trDesc.trim()||`${trFrom} -> ${trTo}`, createdAt:Date.now() })
       setTrAmt(''); setTrDesc(''); setTrMsg('Transferencia registrada!')
       setTimeout(() => { setTrMsg(''); setShowTransfer(false) }, 2000)
       load()
@@ -1528,7 +1610,10 @@ function ContasScreen({ uid }: { uid: string }) {
 
   const prevEntries = entries.filter(e => e.month===pmk)
   const prevMap: Record<string,number> = {}
-  prevEntries.forEach(e => { prevMap[e.account]=e.balance })
+  prevEntries.forEach(e => {
+    const cfg = resolveAccountConfig(e, configs)
+    prevMap[cfg ? cfg.name : e.account] = e.balance
+  })
 
   const totalAtual = calcPatrimonio(entries, selectedMonth, configs)
   const totalPrev = calcPatrimonio(prevEntries, pmk, configs)
@@ -1541,7 +1626,7 @@ function ContasScreen({ uid }: { uid: string }) {
   const allMonthsData = [...new Set(entries.map(e => e.month))].sort().slice(-6)
   const chartData = allMonthsData.map(m => ({ name:monthLabel(m), total:calcPatrimonio(entries,m,configs) }))
 
-  const groupedConfigs = configs.reduce((acc, cfg) => {
+  const groupedConfigs = configs.filter(cfg => !cfg.archived).reduce((acc, cfg) => {
     if (!acc[cfg.type]) acc[cfg.type] = []
     acc[cfg.type].push(cfg)
     return acc
@@ -1569,9 +1654,12 @@ function ContasScreen({ uid }: { uid: string }) {
         <div style={S.card}>
           <div style={{ ...S.label, marginBottom:12 }}>Gerenciar contas</div>
           {editConfigs.map((cfg,i) => (
-            <div key={i} style={{ marginBottom:12, paddingBottom:12, borderBottom:'0.5px solid rgba(255,255,255,0.06)' }}>
+            <div key={cfg.id ?? i} style={{ marginBottom:12, paddingBottom:12, borderBottom:'0.5px solid rgba(255,255,255,0.06)', opacity: cfg.archived ? 0.55 : 1 }}>
               <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6 }}>
                 <input style={{ ...S.input, marginBottom:0, flex:1 }} value={cfg.name} onChange={e => setEditConfigs(prev => prev.map((c,idx) => idx===i?{...c,name:e.target.value}:c))} />
+                <button onClick={() => setEditConfigs(prev => prev.map((c,idx) => idx===i?{...c,archived:!c.archived}:c))} style={{ background:'none', border:'0.5px solid rgba(255,255,255,0.15)', borderRadius:8, color:cfg.archived?'#00E5A0':'rgba(255,255,255,0.5)', cursor:'pointer', fontSize:11, padding:'8px 10px', flexShrink:0, whiteSpace:'nowrap' }}>
+                  {cfg.archived ? 'Mostrar' : 'Ocultar'}
+                </button>
                 <button onClick={() => setEditConfigs(prev => prev.filter((_,idx) => idx!==i))} style={{ background:'none', border:'none', color:'#E24B4A', cursor:'pointer', fontSize:18, flexShrink:0 }}>x</button>
               </div>
               <div style={{ display:'flex', gap:8 }}>
@@ -1589,6 +1677,7 @@ function ContasScreen({ uid }: { uid: string }) {
                   <option value="trading">Trading</option>
                 </select>
               </div>
+              {cfg.archived && <div style={{ fontSize:10, color:'rgba(255,255,255,0.35)', marginTop:6 }}>Oculta — nao aparece mais pra novos lancamentos, mas o historico continua contando no patrimonio.</div>}
             </div>
           ))}
           <div style={{ borderTop:'0.5px solid rgba(255,255,255,0.08)', paddingTop:12, marginTop:8 }}>
@@ -1660,12 +1749,12 @@ function ContasScreen({ uid }: { uid: string }) {
               <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>De</div>
               <select style={S.select} value={trFrom} onChange={e => setTrFrom(e.target.value)}>
                 <option value="">Selecionar...</option>
-                {configs.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                {configs.filter(c => !c.archived).map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
               </select>
               <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Para</div>
               <select style={S.select} value={trTo} onChange={e => setTrTo(e.target.value)}>
                 <option value="">Selecionar...</option>
-                {configs.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                {configs.filter(c => !c.archived).map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
               </select>
               <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
               <input style={S.input} type="text" inputMode="decimal" placeholder="0,00" value={trAmt} onChange={e => setTrAmt(e.target.value)} />
@@ -1794,8 +1883,8 @@ Meta 10% a.a.: ${fmt(meta10)}
 ${rendimento>=meta10?'Acima da meta':'Abaixo da meta'}
 
 SALDOS POR CONTA
-${entries.filter(e => e.month===selectedMonth && configs.some(c => c.name===e.account)).map(e => {
-  const accountClass = classifyAccount(e.account, configs)
+${entries.filter(e => e.month===selectedMonth && resolveAccountConfig(e, configs)).map(e => {
+  const accountClass = classifyAccount(e, configs)
   return `- ${e.account} [${ACCOUNT_CLASS_LABELS[accountClass]}]: ${fmt(e.balance)}`
 }).join('\n')}
 
