@@ -109,12 +109,9 @@ const todayStr = () => {
 
 const currentMonthKey = () => {
   const d = new Date()
-
-  // Até o dia 05 continua no mês anterior
-  if (d.getDate() <= 5) {
-    d.setMonth(d.getMonth() - 1)
-  }
-
+  // O mes de referencia vira junto com o calendario (dia 01). O aviso "atualizar
+  // todo dia 5 do mes" que aparece na tela Contas continua sendo so um lembrete
+  // pro usuario — nao muda mais quando o app considera o mes fechado.
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
