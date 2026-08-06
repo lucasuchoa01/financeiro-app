@@ -92,6 +92,19 @@ const generateAccountId = () => {
   return `acc_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
 }
 
+// O Firestore rejeita gravar qualquer campo com valor undefined (ex.:
+// accountId quando a conta nao foi encontrada). Em vez de deixar cada
+// addDoc/updateDoc lidar com isso, os campos opcionais passam por aqui
+// antes de ir pro banco — assim um id nao resolvido so fica de fora do
+// documento, em vez de travar a gravacao inteira silenciosamente.
+function stripUndefined<T extends Record<string, unknown>>(obj: T): T {
+  const cleaned = {} as T
+  ;(Object.keys(obj) as (keyof T)[]).forEach(key => {
+    if (obj[key] !== undefined) cleaned[key] = obj[key]
+  })
+  return cleaned
+}
+
 // So usada para migrar contas antigas (criadas antes de existir um campo
 // unico de classe) — inferia a classe a partir do nome e do extinto campo
 // "Tipo". Depois da migracao, toda conta ja tem accountClass explicito e
@@ -1165,7 +1178,7 @@ function GastosScreen({ uid }: { uid: string }) {
     try {
       const contaCfg = configs.find(c => c.name === conta)
       await Promise.all([
-        addDoc(collection(db,'users',uid,'transactions'), { type:'expense', value:v, description:desc.trim(), category:normalizedCat, account:conta, accountId:contaCfg?.id, date:data, createdAt:Date.now() }),
+        addDoc(collection(db,'users',uid,'transactions'), stripUndefined({ type:'expense', value:v, description:desc.trim(), category:normalizedCat, account:conta, accountId:contaCfg?.id, date:data, createdAt:Date.now() })),
         addCategory(normalizedCat),
       ])
       setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
@@ -1185,7 +1198,7 @@ function GastosScreen({ uid }: { uid: string }) {
     try {
       const fixAccName = newFixAccount||accountNames[0]||''
       const fixAccCfg = configs.find(c => c.name === fixAccName)
-      await addDoc(collection(db,'users',uid,'fixedExpenses'), { name:newFixName.trim(), amount:v, category:newFixCat.trim()||'Fixo', account:fixAccName, accountId:fixAccCfg?.id, createdAt:Date.now() })
+      await addDoc(collection(db,'users',uid,'fixedExpenses'), stripUndefined({ name:newFixName.trim(), amount:v, category:newFixCat.trim()||'Fixo', account:fixAccName, accountId:fixAccCfg?.id, createdAt:Date.now() }))
       setNewFixName(''); setNewFixAmt(''); setNewFixCat(''); setNewFixAccount('')
       setFixMsg('Adicionado!')
       load()
@@ -1200,7 +1213,7 @@ function GastosScreen({ uid }: { uid: string }) {
 
   const editFixed = async (id: string, fields: Partial<Omit<FixedExpense, 'id' | 'createdAt'>>) => {
     try {
-      await updateDoc(doc(db,'users',uid,'fixedExpenses',id), fields)
+      await updateDoc(doc(db,'users',uid,'fixedExpenses',id), stripUndefined(fields))
       setFixMsg('Gasto fixo atualizado!')
       load()
     } catch {
@@ -1222,15 +1235,20 @@ function GastosScreen({ uid }: { uid: string }) {
 
   const togglePaid = async (fx: FixedExpense) => {
     const [y,m] = mk.split('-')
-    if (isPaid(fx)) {
-      const tx = txs.find(t => (t.fixedExpenseId===fx.id || t.description===`[FIXO] ${fx.name}`) && t.date.endsWith(`/${m}/${y}`) && t.type==='expense')
-      if (tx) await deleteDoc(doc(db,'users',uid,'transactions',tx.id))
-    } else {
-      const fxAccName = fx.account||accountNames[0]||''
-      const fxAccId = fx.accountId ?? configs.find(c => c.name === fxAccName)?.id
-      await addDoc(collection(db,'users',uid,'transactions'), { type:'expense', value:fx.amount, description:`[FIXO] ${fx.name}`, category:fx.category, account:fxAccName, accountId:fxAccId, date:`01/${m}/${y}`, createdAt:Date.now(), fixedExpenseId: fx.id })
+    try {
+      if (isPaid(fx)) {
+        const tx = txs.find(t => (t.fixedExpenseId===fx.id || t.description===`[FIXO] ${fx.name}`) && t.date.endsWith(`/${m}/${y}`) && t.type==='expense')
+        if (tx) await deleteDoc(doc(db,'users',uid,'transactions',tx.id))
+      } else {
+        const fxAccName = fx.account||accountNames[0]||''
+        const fxAccId = fx.accountId ?? configs.find(c => c.name === fxAccName)?.id
+        await addDoc(collection(db,'users',uid,'transactions'), stripUndefined({ type:'expense', value:fx.amount, description:`[FIXO] ${fx.name}`, category:fx.category, account:fxAccName, accountId:fxAccId, date:`01/${m}/${y}`, createdAt:Date.now(), fixedExpenseId: fx.id }))
+      }
+      load()
+    } catch {
+      setFixMsg('Erro ao atualizar. Tente novamente.')
+      setTimeout(() => setFixMsg(''),2500)
     }
-    load()
   }
 
   const expenseTxs = txs.filter(t => t.type==='expense')
@@ -1343,7 +1361,7 @@ function ReceitasScreen({ uid }: { uid: string }) {
     try {
       const contaCfg = configs.find(c => c.name === conta)
       await Promise.all([
-        addDoc(collection(db,'users',uid,'transactions'), { type:'income', value:v, description:desc.trim(), category:normalizedCat, account:conta, accountId:contaCfg?.id, date:data, createdAt:Date.now() }),
+        addDoc(collection(db,'users',uid,'transactions'), stripUndefined({ type:'income', value:v, description:desc.trim(), category:normalizedCat, account:conta, accountId:contaCfg?.id, date:data, createdAt:Date.now() })),
         addCategory(normalizedCat),
       ])
       setValor(''); setDesc(''); setCat(''); setMsg('Salvo!')
@@ -1642,7 +1660,7 @@ function ContasScreen({ uid }: { uid: string }) {
     try {
       const fromCfg = configs.find(c => c.name === trFrom)
       const toCfg = configs.find(c => c.name === trTo)
-      await addDoc(collection(db,'users',uid,'transfers'), { amount:v, fromAccount:trFrom, toAccount:trTo, fromAccountId:fromCfg?.id, toAccountId:toCfg?.id, month:selectedMonth, description:trDesc.trim()||`${trFrom} -> ${trTo}`, createdAt:Date.now() })
+      await addDoc(collection(db,'users',uid,'transfers'), stripUndefined({ amount:v, fromAccount:trFrom, toAccount:trTo, fromAccountId:fromCfg?.id, toAccountId:toCfg?.id, month:selectedMonth, description:trDesc.trim()||`${trFrom} -> ${trTo}`, createdAt:Date.now() }))
       setTrAmt(''); setTrDesc(''); setTrMsg('Transferencia registrada!')
       setTimeout(() => { setTrMsg(''); setShowTransfer(false) }, 2000)
       load()
@@ -1806,7 +1824,7 @@ function ContasScreen({ uid }: { uid: string }) {
               selectedMonth={selectedMonth}
               onDelete={deleteTransfer}
               onUpdate={async (id, fields) => {
-                await updateDoc(doc(db, 'users', uid, 'transfers', id), fields)
+                await updateDoc(doc(db, 'users', uid, 'transfers', id), stripUndefined(fields))
                 load()
               }}
             />
