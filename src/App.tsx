@@ -8,7 +8,6 @@ import { auth, db } from './firebase'
 // ─── TYPES ─────────────────────────────────────────────────────────────────
 
 export type TxType = 'expense' | 'income'
-export type AccountType = 'cash' | 'investment' | 'external'
 export type AccountClass = 'cash' | 'reserve' | 'fixed' | 'variable' | 'trading'
 
 export interface Transaction {
@@ -28,7 +27,6 @@ export interface AccountEntry {
   id: string
   account: string
   accountId?: string
-  accountType: AccountType
   balance: number
   month: string
   createdAt: number
@@ -37,8 +35,7 @@ export interface AccountEntry {
 export interface AccountConfig {
   id: string
   name: string
-  type: AccountType
-  accountClass?: AccountClass
+  accountClass: AccountClass
   archived?: boolean
 }
 
@@ -66,24 +63,20 @@ export interface FixedExpense {
 
 const MONTHLY_INCOME = 0
 
-const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
-  cash: 'Caixa',
-  investment: 'Investimento',
-  external: 'Trading Externo',
-}
-
-const ACCOUNT_TYPE_COLORS: Record<AccountType, string> = {
-  cash: '#4E9EFF',
-  investment: '#00E5A0',
-  external: '#FF9F43',
-}
-
 const ACCOUNT_CLASS_LABELS: Record<AccountClass, string> = {
   cash: 'Caixa',
   reserve: 'Reserva',
   fixed: 'Renda fixa',
   variable: 'Variavel',
   trading: 'Trading',
+}
+
+const ACCOUNT_CLASS_COLORS: Record<AccountClass, string> = {
+  cash: '#4E9EFF',
+  reserve: '#00D1FF',
+  fixed: '#00E5A0',
+  variable: '#9B59FF',
+  trading: '#FF9F43',
 }
 
 const DEFAULT_ALLOCATION_TARGETS: Record<AccountClass, number> = {
@@ -97,6 +90,26 @@ const DEFAULT_ALLOCATION_TARGETS: Record<AccountClass, number> = {
 const generateAccountId = () => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
   return `acc_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+}
+
+// So usada para migrar contas antigas (criadas antes de existir um campo
+// unico de classe) — inferia a classe a partir do nome e do extinto campo
+// "Tipo". Depois da migracao, toda conta ja tem accountClass explicito e
+// essa seguir de heuristicas deixa de ser necessaria.
+function inferLegacyAccountClass(name: string, legacyType?: 'cash' | 'investment' | 'external'): AccountClass {
+  const n = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  if (n.includes('reserva')) return 'reserve'
+  if ((n.includes('nubank') || n.includes('wise')) && !n.includes('reserva')) return 'cash'
+  if (n.includes('renda fixa') || n.includes('cdb') || n.includes('tesouro') || n.includes('selic')) return 'fixed'
+  if (n.includes('clear') || n.includes('acoes') || n.includes('fii') || n.includes('b3')) return 'variable'
+  if (n.includes('forex') || n.includes('prop') || n.includes('proprio')) return 'trading'
+  if (legacyType === 'cash') return 'cash'
+  if (legacyType === 'external') return 'trading'
+  return 'fixed'
+}
+
+function isInvestmentClass(cls: AccountClass): boolean {
+  return cls === 'reserve' || cls === 'fixed' || cls === 'variable'
 }
 
 const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -172,15 +185,20 @@ function useAccountConfigs(uid: string) {
       const snap = await getDocs(collection(db,'users',uid,'config'))
       const cfg = snap.docs.find(d => d.data().id==='accountConfigs')
       if (cfg) {
-        const list = cfg.data().list as AccountConfig[]
-        const needsMigration = list.some(c => !c.id)
-        const migrated = list.map(c => c.id ? c : { ...c, id: generateAccountId() })
+        const rawList = cfg.data().list as Array<AccountConfig & { type?: 'cash' | 'investment' | 'external' }>
+        const needsMigration = rawList.some(c => !c.id || !c.accountClass)
+        const migrated: AccountConfig[] = rawList.map(c => ({
+          id: c.id || generateAccountId(),
+          name: c.name,
+          accountClass: c.accountClass || inferLegacyAccountClass(c.name, c.type),
+          archived: c.archived,
+        }))
         setConfigs(migrated)
         if (needsMigration) {
-          // Contas criadas antes de existir o id ganham um id estavel uma
-          // unica vez aqui, sem exigir nenhuma acao do usuario. A partir
-          // disso, renomear uma conta nao perde mais o vinculo com o
-          // historico de saldos/lancamentos dela.
+          // Contas antigas ganham aqui, uma unica vez e sem acao do
+          // usuario, um id estavel e uma classe explicita — antes, a
+          // classificacao vinha de duas fontes (Tipo + heuristica pelo
+          // nome). Depois disso o campo Tipo antigo para de existir.
           await save(migrated)
         }
       }
@@ -189,11 +207,7 @@ function useAccountConfigs(uid: string) {
 
   useEffect(() => { load() }, [load])
 
-  const getType = (name: string): AccountType => {
-    return configs.find(c => c.name===name)?.type ?? 'cash'
-  }
-
-  return { configs, save, getType, reload: load }
+  return { configs, save, reload: load }
 }
 
 function useCategories(uid: string) {
@@ -294,23 +308,51 @@ function balanceForMonth(entries: AccountEntry[], cfg: AccountConfig, month: str
 }
 
 function calcPatrimonio(entries: AccountEntry[], month: string, validAccounts: AccountConfig[]) {
-  return validAccounts.filter(a => a.type !== 'external').reduce((s, cfg) => s + balanceForMonth(entries, cfg, month), 0)
+  return validAccounts.reduce((s, cfg) => s + balanceForMonth(entries, cfg, month), 0)
 }
 
 function calcInvestimentos(entries: AccountEntry[], month: string, validAccounts: AccountConfig[]) {
-  return validAccounts.filter(a => a.type==='investment').reduce((s, cfg) => s + balanceForMonth(entries, cfg, month), 0)
+  return validAccounts.filter(a => isInvestmentClass(a.accountClass)).reduce((s, cfg) => s + balanceForMonth(entries, cfg, month), 0)
 }
 
 function calcCaixa(entries: AccountEntry[], month: string, validAccounts: AccountConfig[]) {
-  return validAccounts.filter(a => a.type==='cash').reduce((s, cfg) => s + balanceForMonth(entries, cfg, month), 0)
+  return validAccounts.filter(a => a.accountClass==='cash').reduce((s, cfg) => s + balanceForMonth(entries, cfg, month), 0)
 }
 
-function calcExternal(entries: AccountEntry[], month: string, validAccounts: AccountConfig[]) {
-  return validAccounts.filter(a => a.type==='external').reduce((s, cfg) => s + balanceForMonth(entries, cfg, month), 0)
+function calcTrading(entries: AccountEntry[], month: string, validAccounts: AccountConfig[]) {
+  return validAccounts.filter(a => a.accountClass==='trading').reduce((s, cfg) => s + balanceForMonth(entries, cfg, month), 0)
 }
 
-function isInvestmentTransferRef(account: string, accountId: string | undefined, invConfigs: AccountConfig[]): boolean {
-  return invConfigs.some(cfg => (accountId ? accountId === cfg.id : account === cfg.name))
+function isInvestmentTransferRef(account: string, accountId: string | undefined, relConfigs: AccountConfig[]): boolean {
+  return relConfigs.some(cfg => (accountId ? accountId === cfg.id : account === cfg.name))
+}
+
+// Generaliza "quanto uma classe de conta rendeu/perdeu no mes, descontando
+// o que entrou/saiu por transferencia" — usada tanto pro rendimento de
+// investimentos (reserva/renda fixa/variavel) quanto pro resultado de
+// trading, que agora tambem compoe o patrimonio mas continua sendo
+// acompanhado como resultado de operacoes, nao como rendimento passivo.
+function calcResultadoClasse(
+  entries: AccountEntry[],
+  transfers: Transfer[],
+  month: string,
+  pmk: string,
+  validAccounts: AccountConfig[],
+  belongsToClasse: (cls: AccountClass) => boolean
+) {
+  const relConfigs = validAccounts.filter(a => belongsToClasse(a.accountClass))
+  const atual = relConfigs.reduce((s, cfg) => s + balanceForMonth(entries, cfg, month), 0)
+  const anterior = relConfigs.reduce((s, cfg) => s + balanceForMonth(entries, cfg, pmk), 0)
+  const transferido = transfers
+    .filter(t => t.month===month)
+    .reduce((s, t) => {
+      const entrou = isInvestmentTransferRef(t.toAccount, t.toAccountId, relConfigs)
+      const saiu = isInvestmentTransferRef(t.fromAccount, t.fromAccountId, relConfigs)
+      if (entrou && !saiu) return s + t.amount
+      if (saiu && !entrou) return s - t.amount
+      return s
+    }, 0)
+  return atual - anterior - transferido
 }
 
 function calcRendimento(
@@ -320,19 +362,17 @@ function calcRendimento(
   pmk: string,
   validAccounts: AccountConfig[]
 ) {
-  const invAtual = calcInvestimentos(entries, month, validAccounts)
-  const invAnterior = calcInvestimentos(entries, pmk, validAccounts)
-  const invConfigs = validAccounts.filter(a => a.type==='investment')
-  const aportes = transfers
-    .filter(t => t.month===month)
-    .reduce((s, t) => {
-      const toInv = isInvestmentTransferRef(t.toAccount, t.toAccountId, invConfigs)
-      const fromInv = isInvestmentTransferRef(t.fromAccount, t.fromAccountId, invConfigs)
-      if (toInv && !fromInv) return s + t.amount
-      if (fromInv && !toInv) return s - t.amount
-      return s
-    }, 0)
-  return invAtual - invAnterior - aportes
+  return calcResultadoClasse(entries, transfers, month, pmk, validAccounts, isInvestmentClass)
+}
+
+function calcResultadoTrading(
+  entries: AccountEntry[],
+  transfers: Transfer[],
+  month: string,
+  pmk: string,
+  validAccounts: AccountConfig[]
+) {
+  return calcResultadoClasse(entries, transfers, month, pmk, validAccounts, cls => cls === 'trading')
 }
 
 function calcAportes(
@@ -340,7 +380,7 @@ function calcAportes(
   month: string,
   validAccounts: AccountConfig[]
 ) {
-  const invConfigs = validAccounts.filter(a => a.type === 'investment')
+  const invConfigs = validAccounts.filter(a => isInvestmentClass(a.accountClass))
   return transfers
     .filter(t => t.month === month)
     .reduce((s, t) => {
@@ -427,58 +467,29 @@ type AllocationItem = {
   target?: number
 }
 
-function getAllocationData(caixa: number, investimentos: number, external: number): AllocationItem[] {
-  return [
-    { key:'cash', label:'Caixa', short:'Caixa', value:caixa, color:ACCOUNT_TYPE_COLORS.cash },
-    { key:'investment', label:'Renda fixa / invest.', short:'R. fixa', value:investimentos, color:ACCOUNT_TYPE_COLORS.investment },
-    { key:'external', label:'Renda variavel / trading', short:'Variavel', value:external, color:ACCOUNT_TYPE_COLORS.external },
-  ].filter(item => item.value > 0)
-}
-
 function classifyAccount(ref: { account: string; accountId?: string }, configs: AccountConfig[]): AccountClass {
   const cfg = resolveAccountConfig(ref, configs)
-  if (cfg?.accountClass) return cfg.accountClass
-
-  const n = ref.account.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-
-  if (n.includes('reserva')) return 'reserve'
-  if (
-  (n.includes('nubank') || n.includes('wise')) &&
-  !n.includes('reserva')
-  ) {
-  return 'cash'
-}
-  if (n.includes('renda fixa') || n.includes('cdb') || n.includes('tesouro') || n.includes('selic')) return 'fixed'
-  if (n.includes('clear') || n.includes('acoes') || n.includes('fii') || n.includes('b3')) return 'variable'
-  if (n.includes('forex') || n.includes('prop') || n.includes('proprio')) return 'trading'
-
-  const cfgType = cfg?.type
-  if (cfgType === 'cash') return 'cash'
-  if (cfgType === 'external') return 'trading'
-  return 'fixed'
+  return cfg?.accountClass ?? inferLegacyAccountClass(ref.account)
 }
 
 function buildAllocationData(entries: AccountEntry[], month: string, configs: AccountConfig[], targets: Record<AccountClass, number> = DEFAULT_ALLOCATION_TARGETS): AllocationItem[] {
-  const totals = entries
-    .filter(e => e.month === month)
-    .reduce((acc, entry) => {
-      const type = classifyAccount(entry, configs)
-      acc[type] = (acc[type] ?? 0) + entry.balance
-      return acc
-    }, {} as Record<AccountClass, number>)
+  const totals: Record<AccountClass, number> = { cash:0, reserve:0, fixed:0, variable:0, trading:0 }
+  configs.forEach(cfg => {
+    totals[cfg.accountClass] += balanceForMonth(entries, cfg, month)
+  })
 
   return [
-    { key:'cash', label:'Caixa', short:'Caixa', value:totals.cash ?? 0, color:'#4E9EFF' },
-    { key:'reserve', label:'Reserva', short:'Reserva', value:totals.reserve ?? 0, color:'#00D1FF', target:targets.reserve },
-    { key:'fixed', label:'Renda fixa', short:'R. fixa', value:totals.fixed ?? 0, color:'#00E5A0', target:targets.fixed },
-    { key:'variable', label:'Variavel', short:'Variavel', value:totals.variable ?? 0, color:'#9B59FF', target:targets.variable },
-    { key:'trading', label:'Trading', short:'Trading', value:totals.trading ?? 0, color:'#FF9F43', target:targets.trading },
+    { key:'cash', label:'Caixa', short:'Caixa', value:totals.cash, color:ACCOUNT_CLASS_COLORS.cash },
+    { key:'reserve', label:'Reserva', short:'Reserva', value:totals.reserve, color:ACCOUNT_CLASS_COLORS.reserve, target:targets.reserve },
+    { key:'fixed', label:'Renda fixa', short:'R. fixa', value:totals.fixed, color:ACCOUNT_CLASS_COLORS.fixed, target:targets.fixed },
+    { key:'variable', label:'Variavel', short:'Variavel', value:totals.variable, color:ACCOUNT_CLASS_COLORS.variable, target:targets.variable },
+    { key:'trading', label:'Trading', short:'Trading', value:totals.trading, color:ACCOUNT_CLASS_COLORS.trading, target:targets.trading },
   ]
 }
 
-function AllocationCard({ caixa, investimentos, external, data: customData, compact=false, editableTargets=false, onTargetChange }: { caixa?: number; investimentos?: number; external?: number; data?: AllocationItem[]; compact?: boolean; editableTargets?: boolean; onTargetChange?: (key: AccountClass, target: number) => void }) {
-  const rawData = customData ?? getAllocationData(caixa ?? 0, investimentos ?? 0, external ?? 0)
-  const data = rawData.filter(item => item.value > 0)
+function AllocationCard({ data, compact=false, editableTargets=false, onTargetChange }: { data: AllocationItem[]; compact?: boolean; editableTargets?: boolean; onTargetChange?: (key: AccountClass, target: number) => void }) {
+  const rawData = data
+  const data2 = rawData.filter(item => item.value > 0)
   const total = rawData.reduce((s, item) => s + item.value, 0)
   const aporte = total > 0
     ? rawData
@@ -488,7 +499,7 @@ function AllocationCard({ caixa, investimentos, external, data: customData, comp
         return { ...item, pct, gap:(item.target ?? 0) - pct }
       })
       .filter(item => item.gap > 0)
-      .sort((a,b) => b.gap - a.gap)[0] ?? (data.length > 0 ? [...data].sort((a,b) => (a.value/total) - (b.value/total))[0] : null)
+      .sort((a,b) => b.gap - a.gap)[0] ?? (data2.length > 0 ? [...data2].sort((a,b) => (a.value/total) - (b.value/total))[0] : null)
     : null
 
   return (
@@ -513,15 +524,15 @@ function AllocationCard({ caixa, investimentos, external, data: customData, comp
             <div style={{ height:compact?82:104 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={data} dataKey="value" innerRadius={compact?25:32} outerRadius={compact?39:50} paddingAngle={3} stroke="none">
-                    {data.map(item => <Cell key={item.key} fill={item.color} />)}
+                  <Pie data={data2} dataKey="value" innerRadius={compact?25:32} outerRadius={compact?39:50} paddingAngle={3} stroke="none">
+                    {data2.map(item => <Cell key={item.key} fill={item.color} />)}
                   </Pie>
                   <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v)]} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
             <div style={{ display:'grid', gap:8 }}>
-              {data.map(item => {
+              {data2.map(item => {
                 const pct = total > 0 ? (item.value / total) * 100 : 0
                 return (
                   <div key={item.key}>
@@ -796,6 +807,7 @@ function PainelScreen({ uid }: { uid: string }) {
   const patrimonioPrev = calcPatrimonio(entries, pmk, configs)
   const investimentosPrev = calcInvestimentos(entries, pmk, configs)
   const rendimento = calcRendimento(entries, transfers, mk, pmk, configs)
+  const resultadoTrading = calcResultadoTrading(entries, transfers, mk, pmk, configs)
   const rendimentoPct = investimentosPrev > 0 ? (rendimento / investimentosPrev) * 100 : 0
   const varPatrimonio = patrimonioPrev > 0 ? ((patrimonio - patrimonioPrev) / patrimonioPrev) * 100 : 0
   const meta10pct = investimentosPrev * (10 / 12 / 100)
@@ -819,17 +831,33 @@ function PainelScreen({ uid }: { uid: string }) {
   const allocationData = buildAllocationData(entries, mk, configs, allocationTargets)
 
   const evolucaoPatrimonio = patrimonio - patrimonioPrev
-  const saldo = totalReceita - (evolucaoPatrimonio - rendimento)
+  // Trading agora compoe o patrimonio, entao a evolucao do mes inclui o
+  // resultado das operacoes — precisa ser descontado aqui tambem, senao um
+  // lucro/perda de trading aparece como "despesa" negativa/positiva por engano.
+  const saldo = totalReceita - (evolucaoPatrimonio - rendimento - resultadoTrading)
 
   const allMonths = [...new Set(entries.map(e => e.month))].sort().slice(-6)
   const chartData = allMonths.map(m => {
     const prev = prevMonthKey(m)
     const patrimonioMes = calcPatrimonio(entries, m, configs)
+    const patrimonioPrevMes = calcPatrimonio(entries, prev, configs)
+    const rendimentoMes = calcRendimento(entries, transfers, m, prev, configs)
+    const resultadoTradingMes = calcResultadoTrading(entries, transfers, m, prev, configs)
+    const [mY, mM] = m.split('-').map(Number)
+    const receitaMes = txs.filter(t => {
+      const p = t.date.split('/')
+      return t.type==='income' && parseInt(p[1])===mM && parseInt(p[2])===mY
+    }).reduce((s,t) => s+t.value, 0)
     return {
       name: monthLabel(m),
       patrimonio: patrimonioMes,
       investimentos: calcInvestimentos(entries, m, configs),
-      variacao: patrimonioMes - calcPatrimonio(entries, prev, configs),
+      variacao: patrimonioMes - patrimonioPrevMes,
+      // Mesma logica do card "Despesa" do mes atual: receita menos a
+      // variacao de patrimonio (ja descontado rendimento e resultado de
+      // trading) — nao e soma dos gastos lancados, ja que nem todo gasto e
+      // lancado manualmente.
+      despesa: receitaMes - ((patrimonioMes - patrimonioPrevMes) - rendimentoMes - resultadoTradingMes),
     }
   })
 
@@ -1022,6 +1050,31 @@ function PainelScreen({ uid }: { uid: string }) {
                 <span>{row.name}</span>
                 <span>{fmt(row.patrimonio)}</span>
                 <span style={{ color:row.variacao>=0?'#00E5A0':'#E24B4A', fontWeight:600 }}>{row.variacao>=0?'+':''}{fmt(row.variacao)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {chartData.length > 1 && (
+        <div style={S.card}>
+          <div style={S.label}>Despesa por mes</div>
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.35)', marginTop:2, marginBottom:4 }}>Estimada pela variacao do patrimonio, nao e a soma dos gastos lancados</div>
+          <div style={{ height:150, marginTop:8 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData}>
+                <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)',fontSize:10 }} axisLine={false} tickLine={false} />
+                <YAxis hide />
+                <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v),'Despesa']} />
+                <Bar dataKey="despesa" fill="#E24B4A" radius={[4,4,0,0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{ display:'grid', gap:6, marginTop:10 }}>
+            {chartData.map(row => (
+              <div key={row.name} style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'rgba(255,255,255,0.55)' }}>
+                <span>{row.name}</span>
+                <span style={{ color:'#E24B4A', fontWeight:600 }}>{fmt(row.despesa)}</span>
               </div>
             ))}
           </div>
@@ -1426,8 +1479,8 @@ function TransferHistory({ transfers, configs, selectedMonth, onDelete, onUpdate
       <div style={{ ...S.label, marginBottom: 12 }}>Transferencias de {monthLabel(selectedMonth)}</div>
 
       {transfers.map((t, idx) => {
-        const fromType = configs.find(c => c.name === t.fromAccount)?.type ?? 'cash'
-        const toType   = configs.find(c => c.name === t.toAccount)?.type ?? 'cash'
+        const fromClass = resolveAccountConfig({ account: t.fromAccount, accountId: t.fromAccountId }, configs)?.accountClass ?? 'cash'
+        const toClass   = resolveAccountConfig({ account: t.toAccount, accountId: t.toAccountId }, configs)?.accountClass ?? 'cash'
         const isLast   = idx === transfers.length - 1
         const isEditing = editingId === t.id
 
@@ -1464,9 +1517,9 @@ function TransferHistory({ transfers, configs, selectedMonth, onDelete, onUpdate
             ) : (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, flexShrink: 0 }}>
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: ACCOUNT_TYPE_COLORS[fromType] }} />
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: ACCOUNT_CLASS_COLORS[fromClass] }} />
                   <div style={{ width: 1, height: 20, background: 'rgba(255,255,255,0.08)' }} />
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: ACCOUNT_TYPE_COLORS[toType] }} />
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: ACCOUNT_CLASS_COLORS[toClass] }} />
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1518,8 +1571,7 @@ function ContasScreen({ uid }: { uid: string }) {
   const [editMode, setEditMode] = useState(false)
   const [editConfigs, setEditConfigs] = useState<AccountConfig[]>([])
   const [newAccName, setNewAccName] = useState('')
-  const [newAccType, setNewAccType] = useState<AccountType>('cash')
-  const [newAccClass, setNewAccClass] = useState<AccountClass | ''>('')
+  const [newAccClass, setNewAccClass] = useState<AccountClass>('cash')
   const [showTransfer, setShowTransfer] = useState(false)
   const [trFrom, setTrFrom] = useState('')
   const [trTo, setTrTo] = useState('')
@@ -1558,7 +1610,7 @@ function ContasScreen({ uid }: { uid: string }) {
         configs.map(cfg => {
           const v = parseFloat(balances[cfg.name]?.replace(',','.')||'0')
           if (isNaN(v)||v===0) return Promise.resolve()
-          return addDoc(collection(db,'users',uid,'accountEntries'), { account:cfg.name, accountId:cfg.id, accountType:cfg.type, balance:v, month:selectedMonth, createdAt:Date.now() })
+          return addDoc(collection(db,'users',uid,'accountEntries'), { account:cfg.name, accountId:cfg.id, balance:v, month:selectedMonth, createdAt:Date.now() })
         }).filter(Boolean)
       )
       setMsg('Saldos salvos!')
@@ -1572,10 +1624,10 @@ function ContasScreen({ uid }: { uid: string }) {
 
   const saveAccountEdits = async () => {
     const cleaned = editConfigs.filter(c => c.name.trim())
-    if (newAccName.trim()) cleaned.push({ id: generateAccountId(), name:newAccName.trim(), type:newAccType, accountClass: newAccClass || undefined })
+    if (newAccName.trim()) cleaned.push({ id: generateAccountId(), name:newAccName.trim(), accountClass: newAccClass })
     try {
       await saveConfigs(cleaned)
-      setNewAccName(''); setNewAccClass(''); setEditMode(false)
+      setNewAccName(''); setNewAccClass('cash'); setEditMode(false)
       setMsg('Contas atualizadas!')
     } catch {
       setMsg('Erro ao atualizar contas. Tente novamente.')
@@ -1624,10 +1676,10 @@ function ContasScreen({ uid }: { uid: string }) {
   const chartData = allMonthsData.map(m => ({ name:monthLabel(m), total:calcPatrimonio(entries,m,configs) }))
 
   const groupedConfigs = configs.filter(cfg => !cfg.archived).reduce((acc, cfg) => {
-    if (!acc[cfg.type]) acc[cfg.type] = []
-    acc[cfg.type].push(cfg)
+    if (!acc[cfg.accountClass]) acc[cfg.accountClass] = []
+    acc[cfg.accountClass].push(cfg)
     return acc
-  }, {} as Record<AccountType, AccountConfig[]>)
+  }, {} as Record<AccountClass, AccountConfig[]>)
 
   const monthTransfers = transfers.filter(t => t.month === selectedMonth).sort((a, b) => b.createdAt - a.createdAt)
 
@@ -1659,42 +1711,26 @@ function ContasScreen({ uid }: { uid: string }) {
                 </button>
                 <button onClick={() => setEditConfigs(prev => prev.filter((_,idx) => idx!==i))} style={{ background:'none', border:'none', color:'#E24B4A', cursor:'pointer', fontSize:18, flexShrink:0 }}>x</button>
               </div>
-              <div style={{ display:'flex', gap:8 }}>
-                <select style={{ ...S.select, marginBottom:0, flex:1, fontSize:12 }} value={cfg.type} onChange={e => setEditConfigs(prev => prev.map((c,idx) => idx===i?{...c,type:e.target.value as AccountType}:c))}>
-                  <option value="cash">Caixa</option>
-                  <option value="investment">Invest.</option>
-                  <option value="external">Trading</option>
-                </select>
-                <select style={{ ...S.select, marginBottom:0, flex:1, fontSize:12 }} value={cfg.accountClass ?? ''} onChange={e => setEditConfigs(prev => prev.map((c,idx) => idx===i?{...c,accountClass:(e.target.value || undefined) as AccountClass|undefined}:c))}>
-                  <option value="">Classe (auto)</option>
-                  <option value="cash">Caixa</option>
-                  <option value="reserve">Reserva</option>
-                  <option value="fixed">Renda fixa</option>
-                  <option value="variable">Variavel</option>
-                  <option value="trading">Trading</option>
-                </select>
-              </div>
-              {cfg.archived && <div style={{ fontSize:10, color:'rgba(255,255,255,0.35)', marginTop:6 }}>Oculta — nao aparece mais pra novos lancamentos, mas o historico continua contando no patrimonio.</div>}
-            </div>
-          ))}
-          <div style={{ borderTop:'0.5px solid rgba(255,255,255,0.08)', paddingTop:12, marginTop:8 }}>
-            <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:6 }}>+ Nova conta</div>
-            <input style={S.input} placeholder="Nome..." value={newAccName} onChange={e => setNewAccName(e.target.value)} />
-            <div style={{ display:'flex', gap:8 }}>
-              <select style={{ ...S.select, marginBottom:0, flex:1, fontSize:12 }} value={newAccType} onChange={e => setNewAccType(e.target.value as AccountType)}>
-                <option value="cash">Caixa</option>
-                <option value="investment">Invest.</option>
-                <option value="external">Trading</option>
-              </select>
-              <select style={{ ...S.select, marginBottom:0, flex:1, fontSize:12 }} value={newAccClass} onChange={e => setNewAccClass(e.target.value as AccountClass | '')}>
-                <option value="">Classe (auto)</option>
+              <select style={{ ...S.select, marginBottom:0, fontSize:12 }} value={cfg.accountClass} onChange={e => setEditConfigs(prev => prev.map((c,idx) => idx===i?{...c,accountClass:e.target.value as AccountClass}:c))}>
                 <option value="cash">Caixa</option>
                 <option value="reserve">Reserva</option>
                 <option value="fixed">Renda fixa</option>
                 <option value="variable">Variavel</option>
                 <option value="trading">Trading</option>
               </select>
+              {cfg.archived && <div style={{ fontSize:10, color:'rgba(255,255,255,0.35)', marginTop:6 }}>Oculta — nao aparece mais pra novos lancamentos, mas o historico continua contando no patrimonio.</div>}
             </div>
+          ))}
+          <div style={{ borderTop:'0.5px solid rgba(255,255,255,0.08)', paddingTop:12, marginTop:8 }}>
+            <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginBottom:6 }}>+ Nova conta</div>
+            <input style={S.input} placeholder="Nome..." value={newAccName} onChange={e => setNewAccName(e.target.value)} />
+            <select style={{ ...S.select, marginBottom:0, fontSize:12 }} value={newAccClass} onChange={e => setNewAccClass(e.target.value as AccountClass)}>
+              <option value="cash">Caixa</option>
+              <option value="reserve">Reserva</option>
+              <option value="fixed">Renda fixa</option>
+              <option value="variable">Variavel</option>
+              <option value="trading">Trading</option>
+            </select>
           </div>
           {msg && <div style={{ textAlign:'center', color:'#00E5A0', fontSize:13, margin:'8px 0' }}>{msg}</div>}
           <button style={{ ...S.btn, marginTop:14 }} onClick={saveAccountEdits}>Salvar</button>
@@ -1776,16 +1812,16 @@ function ContasScreen({ uid }: { uid: string }) {
             />
           )}
 
-          {/* Saldos agrupados por tipo */}
+          {/* Saldos agrupados por classe */}
           <div style={S.card}>
             <div style={S.label}>Saldos de {monthLabel(selectedMonth)}</div>
             <div style={{ marginTop:12 }}>
-              {(['cash','investment','external'] as AccountType[]).map(type => {
-                const group = groupedConfigs[type]||[]
+              {(['cash','reserve','fixed','variable','trading'] as AccountClass[]).map(cls => {
+                const group = groupedConfigs[cls]||[]
                 if (group.length===0) return null
                 return (
-                  <div key={type} style={{ marginBottom:16 }}>
-                    <div style={{ fontSize:10, color:ACCOUNT_TYPE_COLORS[type], letterSpacing:'0.1em', textTransform:'uppercase', fontFamily:"'DM Mono',monospace", marginBottom:8 }}>{ACCOUNT_TYPE_LABELS[type]}</div>
+                  <div key={cls} style={{ marginBottom:16 }}>
+                    <div style={{ fontSize:10, color:ACCOUNT_CLASS_COLORS[cls], letterSpacing:'0.1em', textTransform:'uppercase', fontFamily:"'DM Mono',monospace", marginBottom:8 }}>{ACCOUNT_CLASS_LABELS[cls]}</div>
                     {group.map(cfg => {
                       const prev = prevMap[cfg.name]
                       const curr = parseFloat(balances[cfg.name]?.replace(',','.')||'0')||0
@@ -1867,7 +1903,7 @@ Receitas: ${fmt(totalReceita)}
 Gastos: ${fmt(totalGasto)}
 Saldo: ${fmt(totalReceita-totalGasto)}
 
-PATRIMONIO (sem trading externo)
+PATRIMONIO
 Atual: ${fmt(patrimonio)}
 Anterior: ${fmt(patrimonioPrev)}
 Variacao: ${fmt(patrimonio-patrimonioPrev)}
