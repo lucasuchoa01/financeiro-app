@@ -540,7 +540,7 @@ function AllocationCard({ data, compact=false, editableTargets=false, onTargetCh
                   <Pie data={data2} dataKey="value" innerRadius={compact?25:32} outerRadius={compact?39:50} paddingAngle={3} stroke="none">
                     {data2.map(item => <Cell key={item.key} fill={item.color} />)}
                   </Pie>
-                  <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v)]} />
+                  <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} itemStyle={{ color:'#fff' }} labelStyle={{ color:'rgba(255,255,255,0.6)' }} formatter={(v: number) => [fmt(v)]} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
@@ -1048,7 +1048,7 @@ function PainelScreen({ uid }: { uid: string }) {
                 </defs>
                 <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.42)',fontSize:10 }} axisLine={false} tickLine={false} />
                 <YAxis width={68} tick={{ fill:'rgba(255,255,255,0.35)',fontSize:10 }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${Math.round(v/1000)}k`} />
-                <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v)]} />
+                <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} itemStyle={{ color:'#fff' }} labelStyle={{ color:'rgba(255,255,255,0.6)' }} formatter={(v: number) => [fmt(v)]} />
                 <Area type="monotone" dataKey="patrimonio" name="Patrimonio" stroke="#4E9EFF" strokeWidth={2} fill="url(#gP)" />
                 <Area type="monotone" dataKey="investimentos" name="Investimentos" stroke="#00E5A0" strokeWidth={1.5} fill="url(#gI)" strokeDasharray="4 2" />
               </AreaChart>
@@ -1078,7 +1078,7 @@ function PainelScreen({ uid }: { uid: string }) {
               <BarChart data={chartData}>
                 <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)',fontSize:10 }} axisLine={false} tickLine={false} />
                 <YAxis hide />
-                <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v),'Rendimento']} />
+                <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} itemStyle={{ color:'#fff' }} labelStyle={{ color:'rgba(255,255,255,0.6)' }} formatter={(v: number) => [fmt(v),'Rendimento']} />
                 <Bar dataKey="rendimento" radius={[4,4,0,0]}>
                   {chartData.map(row => <Cell key={row.name} fill={row.rendimento>=0?'#00E5A0':'#E24B4A'} />)}
                 </Bar>
@@ -1105,7 +1105,7 @@ function PainelScreen({ uid }: { uid: string }) {
               <BarChart data={chartData}>
                 <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)',fontSize:10 }} axisLine={false} tickLine={false} />
                 <YAxis hide />
-                <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v),'Despesa']} />
+                <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} itemStyle={{ color:'#fff' }} labelStyle={{ color:'rgba(255,255,255,0.6)' }} formatter={(v: number) => [fmt(v),'Despesa']} />
                 <Bar dataKey="despesa" fill="#E24B4A" radius={[4,4,0,0]} />
               </BarChart>
             </ResponsiveContainer>
@@ -1447,7 +1447,7 @@ function ReceitasScreen({ uid }: { uid: string }) {
                   <BarChart data={chartData}>
                     <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)',fontSize:10 }} axisLine={false} tickLine={false} />
                     <YAxis hide />
-                    <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v),'Receitas']} />
+                    <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} itemStyle={{ color:'#fff' }} labelStyle={{ color:'rgba(255,255,255,0.6)' }} formatter={(v: number) => [fmt(v),'Receitas']} />
                     <Bar dataKey="total" fill="#00E5A0" radius={[4,4,0,0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -1807,7 +1807,7 @@ function ContasScreen({ uid }: { uid: string }) {
                     </defs>
                     <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)',fontSize:10 }} axisLine={false} tickLine={false} />
                     <YAxis hide />
-                    <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} formatter={(v: number) => [fmt(v)]} />
+                    <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} itemStyle={{ color:'#fff' }} labelStyle={{ color:'rgba(255,255,255,0.6)' }} formatter={(v: number) => [fmt(v)]} />
                     <Area type="monotone" dataKey="total" stroke="#00E5A0" strokeWidth={2} fill="url(#gC)" />
                   </AreaChart>
                 </ResponsiveContainer>
