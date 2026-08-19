@@ -867,6 +867,7 @@ function PainelScreen({ uid }: { uid: string }) {
       investimentos: calcInvestimentos(entries, m, configs),
       variacao: patrimonioMes - patrimonioPrevMes,
       rendimento: rendimentoMes,
+      trading: resultadoTradingMes,
       receita: receitaMes,
       // Mesma logica do card "Despesa" do mes atual: receita menos a
       // variacao de patrimonio (ja descontado rendimento e resultado de
@@ -1091,6 +1092,32 @@ function PainelScreen({ uid }: { uid: string }) {
               <div key={row.name} style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'rgba(255,255,255,0.55)' }}>
                 <span>{row.name}</span>
                 <span style={{ color:row.rendimento>=0?'#00E5A0':'#E24B4A', fontWeight:600 }}>{row.rendimento>=0?'+':''}{fmt(row.rendimento)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {chartData.length > 1 && (
+        <div style={{ ...S.card, border:'0.5px solid rgba(255,159,67,0.25)' }}>
+          <div style={{ ...S.label, color:'#FF9F43' }}>Trading por mes</div>
+          <div style={{ height:150, marginTop:10 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData}>
+                <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)',fontSize:10 }} axisLine={false} tickLine={false} />
+                <YAxis hide />
+                <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} itemStyle={{ color:'#fff' }} labelStyle={{ color:'rgba(255,255,255,0.6)' }} formatter={(v: number) => [fmt(v),'Trading']} />
+                <Bar dataKey="trading" radius={[4,4,0,0]}>
+                  {chartData.map(row => <Cell key={row.name} fill={row.trading>=0?'#00E5A0':'#E24B4A'} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{ display:'grid', gap:6, marginTop:10 }}>
+            {chartData.map(row => (
+              <div key={row.name} style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'rgba(255,255,255,0.55)' }}>
+                <span>{row.name}</span>
+                <span style={{ color:row.trading>=0?'#00E5A0':'#E24B4A', fontWeight:600 }}>{row.trading>=0?'+':''}{fmt(row.trading)}</span>
               </div>
             ))}
           </div>
