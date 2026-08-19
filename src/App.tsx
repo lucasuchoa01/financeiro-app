@@ -865,6 +865,7 @@ function PainelScreen({ uid }: { uid: string }) {
       name: monthLabel(m),
       patrimonio: patrimonioMes,
       investimentos: calcInvestimentos(entries, m, configs),
+      tradingSaldo: calcTrading(entries, m, configs),
       variacao: patrimonioMes - patrimonioPrevMes,
       rendimento: rendimentoMes,
       trading: resultadoTradingMes,
@@ -1089,8 +1090,9 @@ function PainelScreen({ uid }: { uid: string }) {
           </div>
           <div style={{ display:'grid', gap:6, marginTop:10 }}>
             {chartData.map(row => (
-              <div key={row.name} style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'rgba(255,255,255,0.55)' }}>
+              <div key={row.name} style={{ display:'grid', gridTemplateColumns:'48px 1fr auto', gap:8, alignItems:'center', fontSize:11, color:'rgba(255,255,255,0.55)' }}>
                 <span>{row.name}</span>
+                <span>{fmt(row.investimentos)}</span>
                 <span style={{ color:row.rendimento>=0?'#00E5A0':'#E24B4A', fontWeight:600 }}>{row.rendimento>=0?'+':''}{fmt(row.rendimento)}</span>
               </div>
             ))}
@@ -1115,8 +1117,9 @@ function PainelScreen({ uid }: { uid: string }) {
           </div>
           <div style={{ display:'grid', gap:6, marginTop:10 }}>
             {chartData.map(row => (
-              <div key={row.name} style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'rgba(255,255,255,0.55)' }}>
+              <div key={row.name} style={{ display:'grid', gridTemplateColumns:'48px 1fr auto', gap:8, alignItems:'center', fontSize:11, color:'rgba(255,255,255,0.55)' }}>
                 <span>{row.name}</span>
+                <span>{fmt(row.tradingSaldo)}</span>
                 <span style={{ color:row.trading>=0?'#00E5A0':'#E24B4A', fontWeight:600 }}>{row.trading>=0?'+':''}{fmt(row.trading)}</span>
               </div>
             ))}
