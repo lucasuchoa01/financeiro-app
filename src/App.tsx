@@ -867,6 +867,7 @@ function PainelScreen({ uid }: { uid: string }) {
       investimentos: calcInvestimentos(entries, m, configs),
       variacao: patrimonioMes - patrimonioPrevMes,
       rendimento: rendimentoMes,
+      receita: receitaMes,
       // Mesma logica do card "Despesa" do mes atual: receita menos a
       // variacao de patrimonio (ja descontado rendimento e resultado de
       // trading) — nao e soma dos gastos lancados, ja que nem todo gasto e
@@ -1072,7 +1073,7 @@ function PainelScreen({ uid }: { uid: string }) {
 
       {chartData.length > 1 && (
         <div style={{ ...S.card, border:'0.5px solid rgba(0,229,160,0.2)' }}>
-          <div style={{ ...S.label, color:'#00E5A0' }}>Rendimento por mes</div>
+          <div style={{ ...S.label, color:'#00E5A0' }}>Rendimento de Investimentos por mes</div>
           <div style={{ height:150, marginTop:10 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData}>
@@ -1090,6 +1091,30 @@ function PainelScreen({ uid }: { uid: string }) {
               <div key={row.name} style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'rgba(255,255,255,0.55)' }}>
                 <span>{row.name}</span>
                 <span style={{ color:row.rendimento>=0?'#00E5A0':'#E24B4A', fontWeight:600 }}>{row.rendimento>=0?'+':''}{fmt(row.rendimento)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {chartData.length > 1 && (
+        <div style={S.card}>
+          <div style={S.label}>Receita por mes</div>
+          <div style={{ height:150, marginTop:10 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData}>
+                <XAxis dataKey="name" tick={{ fill:'rgba(255,255,255,0.3)',fontSize:10 }} axisLine={false} tickLine={false} />
+                <YAxis hide />
+                <Tooltip contentStyle={{ background:'#1C1D25',border:'none',borderRadius:10,color:'#fff',fontSize:12 }} itemStyle={{ color:'#fff' }} labelStyle={{ color:'rgba(255,255,255,0.6)' }} formatter={(v: number) => [fmt(v),'Receita']} />
+                <Bar dataKey="receita" fill="#00E5A0" radius={[4,4,0,0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{ display:'grid', gap:6, marginTop:10 }}>
+            {chartData.map(row => (
+              <div key={row.name} style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'rgba(255,255,255,0.55)' }}>
+                <span>{row.name}</span>
+                <span style={{ color:'#00E5A0', fontWeight:600 }}>{fmt(row.receita)}</span>
               </div>
             ))}
           </div>
