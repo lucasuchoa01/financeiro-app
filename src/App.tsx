@@ -437,8 +437,71 @@ function CategoryInput({ value, onChange, savedCategories, placeholder }: {
   )
 }
 
-function TxRow({ tx, onDelete }: { tx: Transaction; onDelete?: () => void }) {
+function TxRow({ tx, onDelete, onEdit, configs, savedCats, onCategoryUsed }: {
+  tx: Transaction
+  onDelete?: () => void
+  onEdit?: (id: string, fields: Partial<Omit<Transaction, 'id' | 'createdAt' | 'type'>>) => Promise<void>
+  configs?: AccountConfig[]
+  savedCats?: string[]
+  onCategoryUsed?: (cat: string) => Promise<void>
+}) {
   const isInc = tx.type==='income'
+  const [editing, setEditing] = useState(false)
+  const [editValor, setEditValor] = useState(String(tx.value))
+  const [editDesc, setEditDesc] = useState(tx.description)
+  const [editCat, setEditCat] = useState(tx.category)
+  const [editAccount, setEditAccount] = useState(tx.account)
+  const [editData, setEditData] = useState(tx.date)
+  const [saving, setSaving] = useState(false)
+
+  const accountNames = configs ? configs.map(c => c.name) : []
+
+  const startEdit = () => {
+    setEditValor(String(tx.value)); setEditDesc(tx.description); setEditCat(tx.category)
+    setEditAccount(tx.account); setEditData(tx.date); setEditing(true)
+  }
+
+  const saveEdit = async () => {
+    if (!onEdit) return
+    const v = parseFloat(editValor.replace(',', '.'))
+    if (!v || v <= 0 || !editDesc.trim()) return
+    setSaving(true)
+    const normalizedCat = (editCat.trim()||tx.category).replace(/\b\w/g,c=>c.toUpperCase())
+    const accCfg = configs?.find(c => c.name === editAccount)
+    try {
+      await onEdit(tx.id, { value: v, description: editDesc.trim(), category: normalizedCat, account: editAccount, accountId: accCfg?.id, date: editData })
+      if (onCategoryUsed) await onCategoryUsed(normalizedCat)
+      setEditing(false)
+    } catch {
+      // mantem o formulario aberto pra tentar de novo
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (editing) {
+    return (
+      <div style={{ padding:'12px 0', borderBottom:'0.5px solid rgba(255,255,255,0.04)' }}>
+        <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Valor (R$)</div>
+        <input style={S.input} type="text" inputMode="decimal" value={editValor} onChange={e => setEditValor(e.target.value)} placeholder="0,00" />
+        <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Descricao</div>
+        <input style={S.input} value={editDesc} onChange={e => setEditDesc(e.target.value)} />
+        <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Categoria</div>
+        <CategoryInput value={editCat} onChange={setEditCat} savedCategories={savedCats||[]} placeholder="Categoria..." />
+        <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Conta</div>
+        <select style={S.select} value={editAccount} onChange={e => setEditAccount(e.target.value)}>
+          {accountNames.map(a => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Data</div>
+        <input style={{ ...S.input, marginBottom:12 }} placeholder="dd/mm/aaaa" value={editData} onChange={e => setEditData(e.target.value)} />
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+          <button style={{ ...S.btn, opacity:saving?0.6:1 }} onClick={saveEdit} disabled={saving}>{saving?'Salvando...':'Salvar'}</button>
+          <button style={{ ...S.btnGhost, marginTop:0 }} onClick={() => setEditing(false)}>Cancelar</button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 0', borderBottom:'0.5px solid rgba(255,255,255,0.04)' }}>
       <div style={{ width:8, height:8, borderRadius:'50%', background:isInc?'#00E5A0':'#E24B4A', flexShrink:0 }} />
@@ -447,6 +510,7 @@ function TxRow({ tx, onDelete }: { tx: Transaction; onDelete?: () => void }) {
         <div style={{ fontSize:10, color:'rgba(255,255,255,0.35)' }}>{tx.category} | {tx.account} | {tx.date}</div>
       </div>
       <div style={{ fontSize:13, fontWeight:500, color:isInc?'#00E5A0':'#E24B4A', whiteSpace:'nowrap' }}>{isInc?'+':'-'}{fmt(tx.value)}</div>
+      {onEdit && <button onClick={startEdit} style={{ background:'none', border:'none', color:'rgba(255,255,255,0.35)', cursor:'pointer', fontSize:13, padding:'0 2px' }}>✏️</button>}
       {onDelete && <button onClick={onDelete} style={{ background:'none', border:'none', color:'rgba(255,255,255,0.2)', cursor:'pointer', fontSize:18, padding:'0 2px' }}>x</button>}
     </div>
   )
@@ -1457,6 +1521,11 @@ function ReceitasScreen({ uid }: { uid: string }) {
 
   const deletar = async (id: string) => { await deleteDoc(doc(db,'users',uid,'transactions',id)); load() }
 
+  const editTransaction = async (id: string, fields: Partial<Omit<Transaction, 'id' | 'createdAt' | 'type'>>) => {
+    await updateDoc(doc(db,'users',uid,'transactions',id), stripUndefined(fields))
+    load()
+  }
+
   const filtered = txs.filter(t => { const p=t.date.split('/'); return `${p[2]}-${p[1]}`===filterMonth })
   const totalFiltered = filtered.reduce((s,t) => s+t.value, 0)
   const monthMap: Record<string,number> = {}
@@ -1517,7 +1586,7 @@ function ReceitasScreen({ uid }: { uid: string }) {
           </div>
           {filtered.length===0
             ? <div style={{ ...S.muted, textAlign:'center', padding:'32px 0' }}>Nenhuma receita em {monthLabel(filterMonth)}</div>
-            : <div style={S.card}>{filtered.map(t => <TxRow key={t.id} tx={t} onDelete={() => deletar(t.id)} />)}</div>
+            : <div style={S.card}>{filtered.map(t => <TxRow key={t.id} tx={t} onDelete={() => deletar(t.id)} onEdit={editTransaction} configs={configs} savedCats={savedCats} onCategoryUsed={addCategory} />)}</div>
           }
         </>
       )}
