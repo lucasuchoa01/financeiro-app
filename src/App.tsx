@@ -2136,6 +2136,7 @@ type TradingAccount = {
   name: string
   kind: 'propria' | 'prop'
   stage: string
+  tradingStyle?: 'Day Trade' | 'Swing Trade' | ''
   balanceUsd: number
   monthlyResultUsd: number
   order?: number
@@ -2175,6 +2176,7 @@ function TradingScreen({ uid }: { uid: string }) {
   const [newName, setNewName] = useState('')
   const [newKind, setNewKind] = useState<'propria'|'prop'>('prop')
   const [newStage, setNewStage] = useState('Fase 1')
+  const [newTradingStyle, setNewTradingStyle] = useState<'Day Trade'|'Swing Trade'>('Swing Trade')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
@@ -2226,7 +2228,7 @@ function TradingScreen({ uid }: { uid: string }) {
     const name = newName.trim()
     if (!name) { setMessage('Informe o nome da conta.'); return }
     const key = `${name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}-${Date.now().toString(36)}`
-    const account: TradingAccount = { key, name, kind:newKind, stage:newKind === 'prop' ? newStage : 'Capital próprio', balanceUsd:0, monthlyResultUsd:0, order:accounts.length }
+    const account: TradingAccount = { key, name, kind:newKind, stage:newKind === 'prop' ? newStage : 'Capital próprio', tradingStyle:newKind === 'propria' ? newTradingStyle : '', balanceUsd:0, monthlyResultUsd:0, order:accounts.length }
     setSaving(true); setMessage('')
     try {
       await setDoc(doc(db, 'users', uid, 'tradingAccounts', key), account)
@@ -2318,7 +2320,7 @@ function TradingScreen({ uid }: { uid: string }) {
               </div>
               <div style={{ fontSize:11, color:'rgba(255,255,255,0.45)', marginTop:4 }}>{account.kind === 'propria' ? 'Capital próprio' : 'Mesa proprietária'}</div>
             </div>
-            {account.kind === 'prop' && <span style={{ fontSize:10, color:stageColor(account.stage), background:`${stageColor(account.stage)}12`, border:`1px solid ${stageColor(account.stage)}55`, padding:'4px 7px', borderRadius:20, whiteSpace:'nowrap', marginTop:1 }}>{account.stage}</span>}
+            {account.kind === 'prop' ? <span style={{ fontSize:10, color:stageColor(account.stage), background:`${stageColor(account.stage)}12`, border:`1px solid ${stageColor(account.stage)}55`, padding:'4px 7px', borderRadius:20, whiteSpace:'nowrap', marginTop:1 }}>{account.stage}</span> : account.tradingStyle ? <span style={{ fontSize:10, color:account.tradingStyle === 'Day Trade' ? '#4E9EFF' : '#B69CFF', background:account.tradingStyle === 'Day Trade' ? 'rgba(78,158,255,0.08)' : 'rgba(182,156,255,0.08)', border:`1px solid ${account.tradingStyle === 'Day Trade' ? 'rgba(78,158,255,0.4)' : 'rgba(182,156,255,0.4)'}`, padding:'4px 7px', borderRadius:20, whiteSpace:'nowrap', marginTop:1 }}>{account.tradingStyle}</span> : null}
           </div>
           {!isEditing ? <>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, marginTop:8 }}>
@@ -2331,6 +2333,7 @@ function TradingScreen({ uid }: { uid: string }) {
             <label style={{ display:'block', marginBottom:10 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Saldo atual (USD)</div><input style={S.input} type="number" step="0.01" value={draft?.balanceUsd ?? 0} onChange={e => setDraft(prev => prev ? { ...prev, balanceUsd:tradingNumber(e.target.value) } : prev)} /></label>
             <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Resultado deste mês (USD)</div><input style={S.input} type="number" step="0.01" value={draft?.monthlyResultUsd ?? 0} onChange={e => setDraft(prev => prev ? { ...prev, monthlyResultUsd:tradingNumber(e.target.value) } : prev)} /><div style={{ ...S.muted, fontSize:10, marginTop:4 }}>Use valor negativo se fechou o mês no prejuízo.</div></label>
             {account.kind === 'prop' && <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Status da conta</div><select style={S.input} value={draft?.stage ?? 'Fase 1'} onChange={e => setDraft(prev => prev ? { ...prev, stage:e.target.value } : prev)}><option value="Fase 1">Fase 1</option><option value="Fase 2">Fase 2</option><option value="Funded">Funded</option></select></label>}
+            {account.kind === 'propria' && <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Estilo de trading</div><select style={S.input} value={draft?.tradingStyle ?? ''} onChange={e => setDraft(prev => prev ? { ...prev, tradingStyle:e.target.value as TradingAccount['tradingStyle'] } : prev)}><option value="">Sem tag</option><option value="Day Trade">Day Trade</option><option value="Swing Trade">Swing Trade</option></select></label>}
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}><button style={{ ...S.btn, opacity:saving ? 0.6 : 1 }} onClick={saveAccount} disabled={saving}>{saving ? 'Salvando...' : 'Salvar'}</button><button style={{ ...S.btnGhost, marginTop:0 }} onClick={() => { setEditingKey(null); setDraft(null) }}>Cancelar</button></div>
           </div>}
         </div>
@@ -2341,6 +2344,7 @@ function TradingScreen({ uid }: { uid: string }) {
         <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Nome da conta / mesa</div><input style={S.input} placeholder="Ex.: FTMO 200k" value={newName} onChange={e => setNewName(e.target.value)} /></label>
         <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Tipo</div><select style={S.input} value={newKind} onChange={e => setNewKind(e.target.value as 'propria'|'prop')}><option value="prop">Mesa proprietária</option><option value="propria">Capital próprio</option></select></label>
         {newKind === 'prop' && <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Status inicial</div><select style={S.input} value={newStage} onChange={e => setNewStage(e.target.value)}><option value="Fase 1">Fase 1</option><option value="Fase 2">Fase 2</option><option value="Funded">Funded</option></select></label>}
+        {newKind === 'propria' && <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Estilo de trading</div><select style={S.input} value={newTradingStyle} onChange={e => setNewTradingStyle(e.target.value as 'Day Trade'|'Swing Trade')}><option value="Day Trade">Day Trade</option><option value="Swing Trade">Swing Trade</option></select></label>}
         <button style={{ ...S.btn, opacity:saving ? 0.6 : 1 }} onClick={createAccount} disabled={saving}>{saving ? 'Salvando...' : 'Criar conta'}</button>
       </div>}
       {message && <div style={{ fontSize:12, color:message.toLowerCase().includes('erro') || message.toLowerCase().includes('não foi') ? '#E24B4A' : '#00E5A0', textAlign:'center', margin:'8px 0 16px' }}>{message}</div>}
