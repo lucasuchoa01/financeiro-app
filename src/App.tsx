@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth'
 import type { User } from 'firebase/auth'
-import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, updateDoc } from 'firebase/firestore'
+import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, updateDoc, setDoc } from 'firebase/firestore'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts'
 import { auth, db } from './firebase'
 
@@ -176,7 +176,7 @@ const S = {
   select: { width:'100%', padding:'12px 14px', background:'#1C1D25', border:'0.5px solid rgba(255,255,255,0.12)', borderRadius:12, color:'#fff', fontSize:15, outline:'none', marginBottom:12, appearance:'none' as const },
   btn: { width:'100%', padding:'14px', background:'#4E9EFF', border:'none', borderRadius:12, color:'#fff', fontSize:15, fontWeight:600, cursor:'pointer' },
   btnGhost: { width:'100%', padding:'12px', background:'transparent', border:'0.5px solid rgba(255,255,255,0.15)', borderRadius:12, color:'rgba(255,255,255,0.6)', fontSize:14, cursor:'pointer', marginTop:8 },
-  nav: { position:'absolute' as const, bottom:0, left:0, right:0, background:'#0D0E14', borderTop:'0.5px solid rgba(255,255,255,0.07)', display:'grid', gridTemplateColumns:'repeat(5,1fr)', zIndex:100 },
+  nav: { position:'absolute' as const, bottom:0, left:0, right:0, background:'#0D0E14', borderTop:'0.5px solid rgba(255,255,255,0.07)', display:'grid', gridTemplateColumns:'repeat(6,1fr)', zIndex:100 },
   navBtn: { padding:'8px 0 6px', border:'none', background:'transparent', color:'rgba(255,255,255,0.3)', fontSize:9, fontFamily:"'DM Sans',sans-serif", cursor:'pointer', display:'flex', flexDirection:'column' as const, alignItems:'center', gap:3 },
 }
 
@@ -2128,6 +2128,293 @@ ${mTxs.map(t => `${t.type==='income'?'+':'-'} ${fmt(t.value)} | ${t.description}
   )
 }
 
+
+// ─── TRADING: CONTROLE INDEPENDENTE DAS CONTAS ───────────────────────────────
+
+type TradingAccount = {
+  key: string
+  name: string
+  platform: string
+  kind: 'propria' | 'prop'
+  stage: string
+  nominalUsd: number
+  balanceUsd: number
+  equityUsd: number
+  maxLossUsd: number
+  dailyLossLimitUsd: number
+  currentDrawdownUsd: number
+  targetUsd: number
+  progressUsd: number
+  withdrawnUsd: number
+  monthlyResultUsd: number
+  notes: string
+  updatedAt?: number
+}
+
+type TradingSnapshot = {
+  id: string
+  accountKey: string
+  accountName: string
+  month: string
+  balanceUsd: number
+  equityUsd: number
+  currentDrawdownUsd: number
+  monthlyResultUsd: number
+  withdrawnUsd: number
+  updatedAt: number
+}
+
+const TRADING_DEFAULTS: TradingAccount[] = [
+  { key:'ic-markets', name:'IC Markets', platform:'IC Markets', kind:'propria', stage:'Capital próprio', nominalUsd:0, balanceUsd:0, equityUsd:0, maxLossUsd:0, dailyLossLimitUsd:0, currentDrawdownUsd:0, targetUsd:0, progressUsd:0, withdrawnUsd:0, monthlyResultUsd:0, notes:'' },
+  { key:'ftmo', name:'FTMO', platform:'FTMO', kind:'prop', stage:'Funded', nominalUsd:100000, balanceUsd:0, equityUsd:0, maxLossUsd:10000, dailyLossLimitUsd:5000, currentDrawdownUsd:0, targetUsd:0, progressUsd:0, withdrawnUsd:0, monthlyResultUsd:0, notes:'' },
+  { key:'funding-pips', name:'FundingPips', platform:'FundingPips', kind:'prop', stage:'Fase 2', nominalUsd:100000, balanceUsd:0, equityUsd:0, maxLossUsd:0, dailyLossLimitUsd:0, currentDrawdownUsd:0, targetUsd:0, progressUsd:0, withdrawnUsd:0, monthlyResultUsd:0, notes:'' },
+  { key:'the5ers', name:'The5ers', platform:'The5ers', kind:'prop', stage:'Fase 2', nominalUsd:100000, balanceUsd:0, equityUsd:0, maxLossUsd:0, dailyLossLimitUsd:0, currentDrawdownUsd:0, targetUsd:0, progressUsd:0, withdrawnUsd:0, monthlyResultUsd:0, notes:'' },
+]
+
+const tradingMoney = (value: number) => value.toLocaleString('en-US', { style:'currency', currency:'USD', maximumFractionDigits:2 })
+const tradingMonth = (key: string) => {
+  const [year, month] = key.split('-').map(Number)
+  return `${['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'][month-1]}/${String(year).slice(-2)}`
+}
+const thisTradingMonth = () => {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`
+}
+const tradingNumber = (value: string) => {
+  const parsed = Number(value.replace(/,/g, ''))
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function TradingScreen({ uid }: { uid: string }) {
+  const [accounts, setAccounts] = useState<TradingAccount[]>(TRADING_DEFAULTS)
+  const [snapshots, setSnapshots] = useState<TradingSnapshot[]>([])
+  const [editingKey, setEditingKey] = useState<string|null>(null)
+  const [draft, setDraft] = useState<TradingAccount|null>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState('')
+
+  const load = useCallback(async () => {
+    try {
+      const [accountSnap, historySnap] = await Promise.all([
+        getDocs(collection(db, 'users', uid, 'tradingAccounts')),
+        getDocs(collection(db, 'users', uid, 'tradingHistory')),
+      ])
+      const saved = accountSnap.docs.map(d => ({ ...d.data(), key:d.id } as TradingAccount))
+      const merged = TRADING_DEFAULTS.map(base => ({ ...base, ...(saved.find(a => a.key === base.key) || {}) }))
+      const extra = saved.filter(a => !TRADING_DEFAULTS.some(base => base.key === a.key))
+      setAccounts([...merged, ...extra])
+      setSnapshots(historySnap.docs.map(d => ({ ...d.data(), id:d.id } as TradingSnapshot)).sort((a,b) => b.month.localeCompare(a.month) || b.updatedAt-a.updatedAt))
+    } catch (error) {
+      console.error('Erro ao carregar dados de trading:', error)
+      setMessage('Não foi possível carregar os dados. Verifique a conexão e as regras do Firebase.')
+    } finally {
+      setLoading(false)
+    }
+  }, [uid])
+
+  useEffect(() => { load() }, [load])
+
+  const startEdit = (account: TradingAccount) => {
+    setEditingKey(account.key)
+    setDraft({ ...account })
+    setMessage('')
+  }
+
+  const saveAccount = async () => {
+    if (!draft) return
+    setSaving(true)
+    setMessage('')
+    const now = Date.now()
+    const clean: TradingAccount = {
+      ...draft,
+      nominalUsd: Math.max(0, draft.nominalUsd || 0),
+      balanceUsd: draft.balanceUsd || 0,
+      equityUsd: draft.equityUsd || 0,
+      maxLossUsd: Math.max(0, draft.maxLossUsd || 0),
+      dailyLossLimitUsd: Math.max(0, draft.dailyLossLimitUsd || 0),
+      currentDrawdownUsd: Math.max(0, draft.currentDrawdownUsd || 0),
+      targetUsd: Math.max(0, draft.targetUsd || 0),
+      progressUsd: draft.progressUsd || 0,
+      withdrawnUsd: Math.max(0, draft.withdrawnUsd || 0),
+      monthlyResultUsd: draft.monthlyResultUsd || 0,
+      updatedAt: now,
+    }
+    try {
+      await setDoc(doc(db, 'users', uid, 'tradingAccounts', clean.key), clean)
+      const month = thisTradingMonth()
+      const snapshotId = `${clean.key}_${month}`
+      const snapshot: TradingSnapshot = {
+        id:snapshotId, accountKey:clean.key, accountName:clean.name, month,
+        balanceUsd:clean.balanceUsd, equityUsd:clean.equityUsd,
+        currentDrawdownUsd:clean.currentDrawdownUsd, monthlyResultUsd:clean.monthlyResultUsd,
+        withdrawnUsd:clean.withdrawnUsd, updatedAt:now,
+      }
+      await setDoc(doc(db, 'users', uid, 'tradingHistory', snapshotId), snapshot)
+      setAccounts(prev => prev.map(a => a.key === clean.key ? clean : a))
+      setSnapshots(prev => [snapshot, ...prev.filter(s => s.id !== snapshotId)].sort((a,b) => b.month.localeCompare(a.month) || b.updatedAt-a.updatedAt))
+      setEditingKey(null)
+      setDraft(null)
+      setMessage('Conta salva. Os dados de trading ficam separados do patrimônio.')
+    } catch (error) {
+      console.error('Erro ao salvar conta de trading:', error)
+      setMessage('Erro ao salvar. Confira as permissões do Firestore e tente novamente.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const totalPropNominal = accounts.filter(a => a.kind === 'prop').reduce((sum,a) => sum + a.nominalUsd, 0)
+  const totalWithdrawn = accounts.reduce((sum,a) => sum + a.withdrawnUsd, 0)
+  const totalMonthlyResult = accounts.reduce((sum,a) => sum + a.monthlyResultUsd, 0)
+  const totalDrawdown = accounts.reduce((sum,a) => sum + a.currentDrawdownUsd, 0)
+  const stages = (stage: string) => stage.toLowerCase().includes('funded') ? '#00E5A0' : stage.toLowerCase().includes('fase') ? '#FF9F43' : '#4E9EFF'
+
+  const field = (label: string, key: keyof TradingAccount, hint?: string) => {
+    if (!draft) return null
+    const isText = key === 'name' || key === 'stage' || key === 'notes'
+    return (
+      <label key={String(key)} style={{ display:'block', marginBottom:10 }}>
+        <div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:4 }}>{label}</div>
+        {isText
+          ? <input style={S.input} value={String(draft[key] ?? '')} onChange={e => setDraft(prev => prev ? ({ ...prev, [key]:e.target.value } as TradingAccount) : prev)} placeholder={hint || label} />
+          : <input style={S.input} type="number" step="0.01" value={Number(draft[key] ?? 0)} onChange={e => setDraft(prev => prev ? ({ ...prev, [key]:tradingNumber(e.target.value) } as TradingAccount) : prev)} />}
+        {hint && !isText && <div style={{ fontSize:10, color:'rgba(255,255,255,0.3)', marginTop:-8, marginBottom:6 }}>{hint}</div>}
+      </label>
+    )
+  }
+
+  if (loading) return <LoadingScreen />
+
+  return (
+    <div style={S.screen}>
+      <div style={{ marginBottom:16 }}>
+        <div style={S.label}>Trading</div>
+        <div style={{ fontSize:25, fontWeight:700, marginTop:4 }}>Central de contas</div>
+        <div style={{ ...S.muted, marginTop:5 }}>Acompanhamento separado do patrimônio financeiro.</div>
+      </div>
+
+      <div style={{ ...S.card, border:'0.5px solid rgba(78,158,255,0.22)' }}>
+        <div style={S.label}>Overview</div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:9, marginTop:10 }}>
+          <MetricCard label="Contas cadastradas" value={String(accounts.length)} sub="Própria + prop firms" />
+          <MetricCard label="Capital nominal prop" value={tradingMoney(totalPropNominal)} sub="Não é patrimônio próprio" accent="#4E9EFF" />
+          <MetricCard label="Resultado do mês" value={`${totalMonthlyResult >= 0 ? '+' : ''}${tradingMoney(totalMonthlyResult)}`} sub="Soma informada nas contas" subColor={totalMonthlyResult >= 0 ? '#00E5A0' : '#E24B4A'} accent={totalMonthlyResult >= 0 ? '#00E5A0' : '#E24B4A'} />
+          <MetricCard label="Saques acumulados" value={tradingMoney(totalWithdrawn)} sub="Total recebido informado" accent="#C0A1FF" />
+        </div>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', background:'#1C1D25', borderRadius:10, padding:12, marginTop:10 }}>
+          <div>
+            <div style={S.muted}>Drawdown atual somado</div>
+            <div style={{ fontSize:17, fontWeight:600, color:totalDrawdown > 0 ? '#E24B4A' : '#fff', marginTop:3 }}>{tradingMoney(totalDrawdown)}</div>
+          </div>
+          <div style={{ fontSize:10, color:'rgba(255,255,255,0.35)', maxWidth:120, textAlign:'right' }}>Referência informativa; cada mesa tem regras próprias.</div>
+        </div>
+      </div>
+
+      <div style={{ ...S.card, paddingBottom:6 }}>
+        <div style={S.label}>Minhas contas</div>
+        <div style={{ ...S.muted, marginBottom:10 }}>Edite os valores manualmente e salve cada conta.</div>
+        {accounts.map(account => {
+          const isEditing = editingKey === account.key && draft?.key === account.key
+          const remainingLoss = Math.max(0, account.maxLossUsd - account.currentDrawdownUsd)
+          const progressPct = account.targetUsd > 0 ? Math.max(0, Math.min(100, account.progressUsd / account.targetUsd * 100)) : 0
+          return (
+            <div key={account.key} style={{ border:'0.5px solid rgba(255,255,255,0.08)', borderRadius:13, padding:12, marginBottom:10, background:'#101117' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
+                <div style={{ minWidth:0, flex:1 }}>
+                  <div style={{ fontSize:15, fontWeight:600 }}>{account.name}</div>
+                  <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginTop:3 }}>{account.kind === 'propria' ? 'Capital próprio' : 'Mesa proprietária'} · {account.platform}</div>
+                </div>
+                <span style={{ fontSize:10, color:stages(account.stage), border:`1px solid ${stages(account.stage)}55`, padding:'4px 7px', borderRadius:20, whiteSpace:'nowrap' }}>{account.stage}</span>
+              </div>
+              {!isEditing ? (
+                <>
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:12 }}>
+                    <div style={{ background:'#1C1D25', padding:9, borderRadius:9 }}>
+                      <div style={S.muted}>Capital nominal</div><div style={{ fontSize:13, fontWeight:600, marginTop:3 }}>{tradingMoney(account.nominalUsd)}</div>
+                    </div>
+                    <div style={{ background:'#1C1D25', padding:9, borderRadius:9 }}>
+                      <div style={S.muted}>Saldo / Equity</div><div style={{ fontSize:13, fontWeight:600, marginTop:3 }}>{tradingMoney(account.balanceUsd)} / {tradingMoney(account.equityUsd)}</div>
+                    </div>
+                    <div style={{ background:'#1C1D25', padding:9, borderRadius:9 }}>
+                      <div style={S.muted}>Drawdown atual</div><div style={{ fontSize:13, fontWeight:600, color:account.currentDrawdownUsd > 0 ? '#E24B4A' : '#fff', marginTop:3 }}>{tradingMoney(account.currentDrawdownUsd)}</div>
+                    </div>
+                    <div style={{ background:'#1C1D25', padding:9, borderRadius:9 }}>
+                      <div style={S.muted}>Folga do limite</div><div style={{ fontSize:13, fontWeight:600, color:account.maxLossUsd > 0 && remainingLoss <= account.maxLossUsd*0.25 ? '#E24B4A' : '#fff', marginTop:3 }}>{account.maxLossUsd > 0 ? tradingMoney(remainingLoss) : 'Não informado'}</div>
+                    </div>
+                  </div>
+                  {account.targetUsd > 0 && (
+                    <div style={{ marginTop:11 }}>
+                      <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>
+                        <span>Progresso da meta</span><span>{progressPct.toFixed(1)}%</span>
+                      </div>
+                      <div style={{ height:6, background:'#292A33', borderRadius:20, overflow:'hidden' }}><div style={{ height:'100%', width:`${progressPct}%`, background:'#4E9EFF', borderRadius:20 }} /></div>
+                      <div style={{ fontSize:10, color:'rgba(255,255,255,0.35)', marginTop:4 }}>{tradingMoney(account.progressUsd)} de {tradingMoney(account.targetUsd)}</div>
+                    </div>
+                  )}
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:11 }}>
+                    <div><div style={S.muted}>Resultado do mês</div><div style={{ fontSize:12, color:account.monthlyResultUsd >= 0 ? '#00E5A0' : '#E24B4A', marginTop:3 }}>{account.monthlyResultUsd >= 0 ? '+' : ''}{tradingMoney(account.monthlyResultUsd)}</div></div>
+                    <div><div style={S.muted}>Saques acumulados</div><div style={{ fontSize:12, marginTop:3 }}>{tradingMoney(account.withdrawnUsd)}</div></div>
+                  </div>
+                  {account.notes && <div style={{ fontSize:11, color:'rgba(255,255,255,0.45)', marginTop:10, whiteSpace:'pre-wrap' }}>{account.notes}</div>}
+                  {account.updatedAt && <div style={{ fontSize:9, color:'rgba(255,255,255,0.25)', marginTop:8 }}>Atualizado em {new Date(account.updatedAt).toLocaleDateString('pt-BR')}</div>}
+                  <button style={{ ...S.btnGhost, marginTop:12 }} onClick={() => startEdit(account)}>Editar dados da conta</button>
+                </>
+              ) : (
+                <div style={{ marginTop:12 }}>
+                  {field('Nome da conta', 'name')}
+                  {field('Etapa / status', 'stage', 'Ex.: Capital próprio, Fase 2, Funded, Pausada')}
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+                    {field('Capital nominal (USD)', 'nominalUsd')}
+                    {field('Saldo (USD)', 'balanceUsd')}
+                    {field('Equity (USD)', 'equityUsd')}
+                    {field('Limite máximo de perda (USD)', 'maxLossUsd', 'Informe conforme as regras da conta')}
+                    {field('Limite de perda diária (USD)', 'dailyLossLimitUsd')}
+                    {field('Drawdown atual (USD)', 'currentDrawdownUsd', 'Valor de perda acumulada em relação à referência definida')}
+                    {field('Meta da fase (USD)', 'targetUsd')}
+                    {field('Progresso da meta (USD)', 'progressUsd')}
+                    {field('Saques acumulados (USD)', 'withdrawnUsd')}
+                    {field('Resultado do mês (USD)', 'monthlyResultUsd')}
+                  </div>
+                  {field('Observações', 'notes', 'Regras, prazo, lembretes...')}
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+                    <button style={{ ...S.btn, opacity:saving ? 0.6 : 1 }} onClick={saveAccount} disabled={saving}>{saving ? 'Salvando...' : 'Salvar conta'}</button>
+                    <button style={{ ...S.btnGhost, marginTop:0 }} onClick={() => { setEditingKey(null); setDraft(null) }}>Cancelar</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      <div style={S.card}>
+        <div style={S.label}>Histórico mensal</div>
+        <div style={{ ...S.muted, marginBottom:10 }}>Ao salvar uma conta, o registro daquele mês é atualizado com os valores mais recentes.</div>
+        {snapshots.length === 0
+          ? <div style={{ ...S.muted, padding:'12px 0', textAlign:'center' }}>Nenhum histórico salvo ainda. Edite e salve uma conta para começar.</div>
+          : snapshots.slice(0,12).map(snapshot => (
+            <div key={snapshot.id} style={{ padding:'10px 0', borderBottom:'0.5px solid rgba(255,255,255,0.05)' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', gap:8 }}>
+                <div style={{ fontSize:12, fontWeight:600 }}>{snapshot.accountName}</div>
+                <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)' }}>{tradingMonth(snapshot.month)}</div>
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, marginTop:7 }}>
+                <div style={S.muted}>Saldo: {tradingMoney(snapshot.balanceUsd)}</div>
+                <div style={S.muted}>Equity: {tradingMoney(snapshot.equityUsd)}</div>
+                <div style={S.muted}>Resultado: <span style={{ color:snapshot.monthlyResultUsd >= 0 ? '#00E5A0' : '#E24B4A' }}>{tradingMoney(snapshot.monthlyResultUsd)}</span></div>
+                <div style={S.muted}>Drawdown: {tradingMoney(snapshot.currentDrawdownUsd)}</div>
+              </div>
+            </div>
+          ))}
+      </div>
+      {message && <div style={{ fontSize:12, color:message.startsWith('Conta salva') ? '#00E5A0' : '#E24B4A', textAlign:'center', margin:'8px 0 16px' }}>{message}</div>}
+      <div style={{ ...S.muted, textAlign:'center', padding:'0 8px 14px' }}>Os dados desta página ficam em users/{'{uid}'}/tradingAccounts e tradingHistory. Não alimentam o patrimônio, os investimentos nem os relatórios financeiros.</div>
+    </div>
+  )
+}
+
+
 // ─── NAV ───────────────────────────────────────────────────────────────────
 
 const navIcons: Record<string,string> = {
@@ -2136,6 +2423,7 @@ const navIcons: Record<string,string> = {
   receitas:'M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z',
   contas:'M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9H9V9h10v2zm-4 4H9v-2h6v2zm4-8H9V5h10v2z',
   relatorio:'M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z',
+  trading:'M3 3h2v16h16v2H3V3zm5 11 4-5 3 2 5-7 2 1-6 9-3-2-3 4-2-2z',
 }
 
 const NavIcon = ({ type }: { type: string }) => (
@@ -2144,7 +2432,7 @@ const NavIcon = ({ type }: { type: string }) => (
 
 // ─── APP ROOT ──────────────────────────────────────────────────────────────
 
-type Screen = 'painel'|'gastos'|'receitas'|'contas'|'relatorio'
+type Screen = 'painel'|'gastos'|'receitas'|'contas'|'trading'|'relatorio'
 
 export default function App() {
   const [user, setUser] = useState<User|null>(null)
@@ -2161,7 +2449,7 @@ export default function App() {
 
   const navItems: { key: Screen; label: string }[] = [
     { key:'painel', label:'Painel' },{ key:'gastos', label:'Gastos' },
-    { key:'receitas', label:'Receitas' },{ key:'contas', label:'Contas' },{ key:'relatorio', label:'Relatorio' },
+    { key:'receitas', label:'Receitas' },{ key:'contas', label:'Contas' },{ key:'trading', label:'Trading' },{ key:'relatorio', label:'Relatorio' },
   ]
 
   return (
@@ -2171,6 +2459,7 @@ export default function App() {
         {screen==='gastos' && <GastosScreen uid={user.uid} />}
         {screen==='receitas' && <ReceitasScreen uid={user.uid} />}
         {screen==='contas' && <ContasScreen uid={user.uid} />}
+        {screen==='trading' && <TradingScreen uid={user.uid} />}
         {screen==='relatorio' && <RelatorioScreen uid={user.uid} />}
         <nav style={S.nav}>
           {navItems.map(item => (
