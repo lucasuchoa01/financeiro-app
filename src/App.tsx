@@ -2138,6 +2138,7 @@ type TradingAccount = {
   stage: string
   balanceUsd: number
   monthlyResultUsd: number
+  order?: number
   updatedAt?: number
 }
 
@@ -2185,7 +2186,7 @@ function TradingScreen({ uid }: { uid: string }) {
         getDocs(collection(db, 'users', uid, 'tradingAccounts')),
         getDocs(collection(db, 'users', uid, 'tradingHistory')),
       ])
-      setAccounts(accountSnap.docs.map(d => ({ ...d.data(), key:d.id } as TradingAccount)))
+      setAccounts(accountSnap.docs.map((d, index) => ({ ...d.data(), key:d.id, order: typeof d.data().order === 'number' ? d.data().order : index } as TradingAccount)).sort((a,b) => (a.order ?? 0) - (b.order ?? 0)))
       setHistory(historySnap.docs.map(d => ({ ...d.data(), id:d.id } as TradingSnapshot)).sort((a,b) => b.month.localeCompare(a.month)))
     } catch (error) {
       console.error('Erro ao carregar dados de trading:', error)
@@ -2225,15 +2226,33 @@ function TradingScreen({ uid }: { uid: string }) {
     const name = newName.trim()
     if (!name) { setMessage('Informe o nome da conta.'); return }
     const key = `${name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}-${Date.now().toString(36)}`
-    const account: TradingAccount = { key, name, kind:newKind, stage:newKind === 'prop' ? newStage : 'Capital próprio', balanceUsd:0, monthlyResultUsd:0 }
+    const account: TradingAccount = { key, name, kind:newKind, stage:newKind === 'prop' ? newStage : 'Capital próprio', balanceUsd:0, monthlyResultUsd:0, order:accounts.length }
     setSaving(true); setMessage('')
     try {
       await setDoc(doc(db, 'users', uid, 'tradingAccounts', key), account)
-      setAccounts(prev => [...prev, account]); setNewName(''); setNewAccountOpen(false); setMessage('Conta adicionada.')
+      setAccounts(prev => [...prev, { ...account, order:prev.length }]); setNewName(''); setNewAccountOpen(false); setMessage('Conta adicionada.')
     } catch (error) {
       console.error('Erro ao criar conta de trading:', error)
       setMessage('Erro ao criar conta. Confira as permissões do Firestore.')
     } finally { setSaving(false) }
+  }
+
+  const moveAccount = async (account: TradingAccount, direction: -1 | 1) => {
+    const current = [...accounts].sort((a,b) => (a.order ?? 0) - (b.order ?? 0))
+    const index = current.findIndex(a => a.key === account.key)
+    const target = index + direction
+    if (index < 0 || target < 0 || target >= current.length) return
+    const reordered = [...current]
+    ;[reordered[index], reordered[target]] = [reordered[target], reordered[index]]
+    const normalized = reordered.map((a, i) => ({ ...a, order:i }))
+    setAccounts(normalized)
+    try {
+      await Promise.all(normalized.map(a => setDoc(doc(db, 'users', uid, 'tradingAccounts', a.key), { order:a.order }, { merge:true })))
+    } catch (error) {
+      console.error('Erro ao salvar a ordem das contas:', error)
+      setMessage('A ordem mudou na tela, mas não foi possível salvá-la no Firebase.')
+      load()
+    }
   }
 
   const removeAccount = async (account: TradingAccount) => {
@@ -2283,16 +2302,18 @@ function TradingScreen({ uid }: { uid: string }) {
         </div>}
       </div>
 
-      {accounts.map(account => {
+      {accounts.slice().sort((a,b) => (a.order ?? 0) - (b.order ?? 0)).map(account => {
         const isEditing = editingKey === account.key && draft?.key === account.key
         return <div key={account.key} style={{ ...S.card, marginBottom:9, padding:12, border:'1px solid rgba(255,255,255,0.09)', background:'linear-gradient(145deg, rgba(255,255,255,0.025), rgba(18,19,25,0.98) 60%)' }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
             <div style={{ minWidth:0, flex:1 }}>
-              <div style={{ display:'flex', alignItems:'center', gap:7, minWidth:0 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:6, minWidth:0 }}>
                 <div style={{ fontSize:14, fontWeight:700, lineHeight:1.25, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{account.name}</div>
-                {!isEditing && <div style={{ display:'flex', alignItems:'center', gap:5, flexShrink:0 }}>
-                  <button title="Editar conta" aria-label="Editar conta" style={{ ...S.btnGhost, marginTop:0, width:28, height:26, minHeight:26, padding:0, display:'grid', placeItems:'center', borderRadius:8 }} onClick={() => startEdit(account)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg></button>
-                  <button title="Excluir conta" aria-label="Excluir conta" style={{ ...S.btnGhost, marginTop:0, width:28, height:26, minHeight:26, padding:0, display:'grid', placeItems:'center', color:'#FF6B6B', borderColor:'rgba(255,107,107,0.3)', borderRadius:8 }} onClick={() => removeAccount(account)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg></button>
+                {!isEditing && <div style={{ display:'flex', alignItems:'center', gap:3, flexShrink:0 }}>
+                  <button title="Mover conta para cima" aria-label="Mover conta para cima" disabled={accounts.slice().sort((a,b) => (a.order ?? 0) - (b.order ?? 0))[0]?.key === account.key} style={{ ...S.btnGhost, marginTop:0, width:24, height:23, minHeight:23, padding:0, display:'grid', placeItems:'center', borderRadius:7, opacity:accounts.slice().sort((a,b) => (a.order ?? 0) - (b.order ?? 0))[0]?.key === account.key ? 0.25 : 0.8 }} onClick={() => moveAccount(account,-1)}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m18 15-6-6-6 6"/></svg></button>
+                  <button title="Mover conta para baixo" aria-label="Mover conta para baixo" disabled={accounts.slice().sort((a,b) => (a.order ?? 0) - (b.order ?? 0))[accounts.length-1]?.key === account.key} style={{ ...S.btnGhost, marginTop:0, width:24, height:23, minHeight:23, padding:0, display:'grid', placeItems:'center', borderRadius:7, opacity:accounts.slice().sort((a,b) => (a.order ?? 0) - (b.order ?? 0))[accounts.length-1]?.key === account.key ? 0.25 : 0.8 }} onClick={() => moveAccount(account,1)}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
+                  <button title="Editar conta" aria-label="Editar conta" style={{ ...S.btnGhost, marginTop:0, width:24, height:23, minHeight:23, padding:0, display:'grid', placeItems:'center', borderRadius:7 }} onClick={() => startEdit(account)}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg></button>
+                  <button title="Excluir conta" aria-label="Excluir conta" style={{ ...S.btnGhost, marginTop:0, width:24, height:23, minHeight:23, padding:0, display:'grid', placeItems:'center', color:'#FF6B6B', borderColor:'rgba(255,107,107,0.3)', borderRadius:7 }} onClick={() => removeAccount(account)}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg></button>
                 </div>}
               </div>
               <div style={{ fontSize:11, color:'rgba(255,255,255,0.45)', marginTop:4 }}>{account.kind === 'propria' ? 'Capital próprio' : 'Mesa proprietária'}</div>
