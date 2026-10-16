@@ -2138,6 +2138,7 @@ type TradingAccount = {
   stage: string
   tradingStyle?: 'Day Trade' | 'Swing Trade' | ''
   balanceUsd: number
+  monthlyStartBalanceUsd?: number
   monthlyResultUsd: number
   order?: number
   updatedAt?: number
@@ -2149,6 +2150,7 @@ type TradingSnapshot = {
   accountName: string
   month: string
   balanceUsd: number
+  monthlyStartBalanceUsd: number
   monthlyResultUsd: number
   updatedAt: number
 }
@@ -2207,9 +2209,9 @@ function TradingScreen({ uid }: { uid: string }) {
   const saveAccount = async () => {
     if (!draft) return
     setSaving(true); setMessage('')
-    const clean: TradingAccount = { ...draft, balanceUsd: draft.balanceUsd || 0, monthlyResultUsd: draft.monthlyResultUsd || 0, updatedAt:Date.now() }
+    const clean: TradingAccount = { ...draft, balanceUsd: draft.balanceUsd || 0, monthlyStartBalanceUsd: draft.monthlyStartBalanceUsd || 0, monthlyResultUsd: (draft.balanceUsd || 0) - (draft.monthlyStartBalanceUsd || 0), updatedAt:Date.now() }
     const snapshotId = `${clean.key}_${month}`
-    const snapshot: TradingSnapshot = { id:snapshotId, accountKey:clean.key, accountName:clean.name, month, balanceUsd:clean.balanceUsd, monthlyResultUsd:clean.monthlyResultUsd, updatedAt:Date.now() }
+    const snapshot: TradingSnapshot = { id:snapshotId, accountKey:clean.key, accountName:clean.name, month, balanceUsd:clean.balanceUsd, monthlyStartBalanceUsd:clean.monthlyStartBalanceUsd || 0, monthlyResultUsd:clean.monthlyResultUsd, updatedAt:Date.now() }
     try {
       await Promise.all([
         setDoc(doc(db, 'users', uid, 'tradingAccounts', clean.key), clean),
@@ -2228,7 +2230,7 @@ function TradingScreen({ uid }: { uid: string }) {
     const name = newName.trim()
     if (!name) { setMessage('Informe o nome da conta.'); return }
     const key = `${name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}-${Date.now().toString(36)}`
-    const account: TradingAccount = { key, name, kind:newKind, stage:newKind === 'prop' ? newStage : 'Capital próprio', tradingStyle:newKind === 'propria' ? newTradingStyle : '', balanceUsd:0, monthlyResultUsd:0, order:accounts.length }
+    const account: TradingAccount = { key, name, kind:newKind, stage:newKind === 'prop' ? newStage : 'Capital próprio', tradingStyle:newKind === 'propria' ? newTradingStyle : '', balanceUsd:0, monthlyStartBalanceUsd:0, monthlyResultUsd:0, order:accounts.length }
     setSaving(true); setMessage('')
     try {
       await setDoc(doc(db, 'users', uid, 'tradingAccounts', key), account)
@@ -2325,13 +2327,14 @@ function TradingScreen({ uid }: { uid: string }) {
           {!isEditing ? <>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, marginTop:8 }}>
               <div style={{ background:'#1C1D25', padding:'8px 9px', borderRadius:8 }}><div style={S.muted}>Saldo</div><div style={{ fontSize:15, fontWeight:700, marginTop:3 }}>{tradingMoney(account.balanceUsd)}</div></div>
-              <div style={{ background:'#1C1D25', padding:'8px 9px', borderRadius:8 }}><div style={S.muted}>Resultado do mês</div><div style={{ fontSize:13, fontWeight:700, marginTop:3, color:account.monthlyResultUsd >= 0 ? '#00E5A0' : '#FF6B6B' }}>{account.monthlyResultUsd >= 0 ? '+' : ''}{tradingMoney(account.monthlyResultUsd)}</div></div>
+              <div style={{ background:'#1C1D25', padding:'8px 9px', borderRadius:8 }}><div style={S.muted}>Resultado do mês</div><div style={{ fontSize:13, fontWeight:700, marginTop:3, color:account.monthlyResultUsd >= 0 ? '#00E5A0' : '#FF6B6B' }}>{account.monthlyResultUsd >= 0 ? '+' : ''}{tradingMoney(account.monthlyResultUsd)}</div><div style={{ ...S.muted, fontSize:9, marginTop:2 }}>Inicial: {tradingMoney(account.monthlyStartBalanceUsd ?? 0)}</div></div>
             </div>
             {account.updatedAt && <div style={{ fontSize:9, color:'rgba(255,255,255,0.25)', marginTop:8 }}>Atualizado em {new Date(account.updatedAt).toLocaleDateString('pt-BR')}</div>}
           </> : <div style={{ marginTop:10 }}>
             <label style={{ display:'block', marginBottom:10 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Nome da conta</div><input style={S.input} value={draft?.name ?? ''} onChange={e => setDraft(prev => prev ? { ...prev, name:e.target.value } : prev)} /></label>
-            <label style={{ display:'block', marginBottom:10 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Saldo atual (USD)</div><input style={S.input} type="number" step="0.01" value={draft?.balanceUsd ?? 0} onChange={e => setDraft(prev => prev ? { ...prev, balanceUsd:tradingNumber(e.target.value) } : prev)} /></label>
-            <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Resultado deste mês (USD)</div><input style={S.input} type="number" step="0.01" value={draft?.monthlyResultUsd ?? 0} onChange={e => setDraft(prev => prev ? { ...prev, monthlyResultUsd:tradingNumber(e.target.value) } : prev)} /><div style={{ ...S.muted, fontSize:10, marginTop:4 }}>Use valor negativo se fechou o mês no prejuízo.</div></label>
+            <label style={{ display:'block', marginBottom:10 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Saldo inicial do mês (USD)</div><input style={S.input} type="number" step="0.01" value={draft?.monthlyStartBalanceUsd ?? 0} onChange={e => setDraft(prev => prev ? { ...prev, monthlyStartBalanceUsd:tradingNumber(e.target.value), monthlyResultUsd:(prev.balanceUsd || 0)-tradingNumber(e.target.value) } : prev)} /></label>
+            <label style={{ display:'block', marginBottom:10 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Saldo atual (USD)</div><input style={S.input} type="number" step="0.01" value={draft?.balanceUsd ?? 0} onChange={e => setDraft(prev => prev ? { ...prev, balanceUsd:tradingNumber(e.target.value), monthlyResultUsd:tradingNumber(e.target.value)-(prev.monthlyStartBalanceUsd || 0) } : prev)} /></label>
+            <div style={{ background:'#1C1D25', padding:10, borderRadius:8, marginBottom:12 }}><div style={S.muted}>Resultado automático do mês</div><div style={{ fontSize:16, fontWeight:700, marginTop:3, color:((draft?.balanceUsd ?? 0)- (draft?.monthlyStartBalanceUsd ?? 0)) >= 0 ? '#00E5A0' : '#FF6B6B' }}>{((draft?.balanceUsd ?? 0)- (draft?.monthlyStartBalanceUsd ?? 0)) >= 0 ? '+' : ''}{tradingMoney((draft?.balanceUsd ?? 0)-(draft?.monthlyStartBalanceUsd ?? 0))}</div><div style={{ ...S.muted, fontSize:10, marginTop:4 }}>Saldo atual menos saldo inicial do mês selecionado ({tradingMonth(month)}).</div></div>
             {account.kind === 'prop' && <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Status da conta</div><select style={S.input} value={draft?.stage ?? 'Fase 1'} onChange={e => setDraft(prev => prev ? { ...prev, stage:e.target.value } : prev)}><option value="Fase 1">Fase 1</option><option value="Fase 2">Fase 2</option><option value="Funded">Funded</option></select></label>}
             {account.kind === 'propria' && <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Estilo de trading</div><select style={S.input} value={draft?.tradingStyle ?? ''} onChange={e => setDraft(prev => prev ? { ...prev, tradingStyle:e.target.value as TradingAccount['tradingStyle'] } : prev)}><option value="">Sem tag</option><option value="Day Trade">Day Trade</option><option value="Swing Trade">Swing Trade</option></select></label>}
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}><button style={{ ...S.btn, opacity:saving ? 0.6 : 1 }} onClick={saveAccount} disabled={saving}>{saving ? 'Salvando...' : 'Salvar'}</button><button style={{ ...S.btnGhost, marginTop:0 }} onClick={() => { setEditingKey(null); setDraft(null) }}>Cancelar</button></div>
