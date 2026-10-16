@@ -2134,20 +2134,10 @@ ${mTxs.map(t => `${t.type==='income'?'+':'-'} ${fmt(t.value)} | ${t.description}
 type TradingAccount = {
   key: string
   name: string
-  platform: string
   kind: 'propria' | 'prop'
   stage: string
-  nominalUsd: number
   balanceUsd: number
-  equityUsd: number
-  maxLossUsd: number
-  dailyLossLimitUsd: number
-  currentDrawdownUsd: number
-  targetUsd: number
-  progressUsd: number
-  withdrawnUsd: number
   monthlyResultUsd: number
-  notes: string
   updatedAt?: number
 }
 
@@ -2157,19 +2147,9 @@ type TradingSnapshot = {
   accountName: string
   month: string
   balanceUsd: number
-  equityUsd: number
-  currentDrawdownUsd: number
   monthlyResultUsd: number
-  withdrawnUsd: number
   updatedAt: number
 }
-
-const TRADING_DEFAULTS: TradingAccount[] = [
-  { key:'ic-markets', name:'IC Markets', platform:'IC Markets', kind:'propria', stage:'Capital próprio', nominalUsd:0, balanceUsd:0, equityUsd:0, maxLossUsd:0, dailyLossLimitUsd:0, currentDrawdownUsd:0, targetUsd:0, progressUsd:0, withdrawnUsd:0, monthlyResultUsd:0, notes:'' },
-  { key:'ftmo', name:'FTMO', platform:'FTMO', kind:'prop', stage:'Funded', nominalUsd:100000, balanceUsd:0, equityUsd:0, maxLossUsd:10000, dailyLossLimitUsd:5000, currentDrawdownUsd:0, targetUsd:0, progressUsd:0, withdrawnUsd:0, monthlyResultUsd:0, notes:'' },
-  { key:'funding-pips', name:'FundingPips', platform:'FundingPips', kind:'prop', stage:'Fase 2', nominalUsd:100000, balanceUsd:0, equityUsd:0, maxLossUsd:0, dailyLossLimitUsd:0, currentDrawdownUsd:0, targetUsd:0, progressUsd:0, withdrawnUsd:0, monthlyResultUsd:0, notes:'' },
-  { key:'the5ers', name:'The5ers', platform:'The5ers', kind:'prop', stage:'Fase 2', nominalUsd:100000, balanceUsd:0, equityUsd:0, maxLossUsd:0, dailyLossLimitUsd:0, currentDrawdownUsd:0, targetUsd:0, progressUsd:0, withdrawnUsd:0, monthlyResultUsd:0, notes:'' },
-]
 
 const tradingMoney = (value: number) => value.toLocaleString('en-US', { style:'currency', currency:'USD', maximumFractionDigits:2 })
 const tradingMonth = (key: string) => {
@@ -2186,26 +2166,31 @@ const tradingNumber = (value: string) => {
 }
 
 function TradingScreen({ uid }: { uid: string }) {
-  const [accounts, setAccounts] = useState<TradingAccount[]>(TRADING_DEFAULTS)
+  const [accounts, setAccounts] = useState<TradingAccount[]>([])
+  const [history, setHistory] = useState<TradingSnapshot[]>([])
   const [editingKey, setEditingKey] = useState<string|null>(null)
   const [draft, setDraft] = useState<TradingAccount|null>(null)
+  const [newAccountOpen, setNewAccountOpen] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newKind, setNewKind] = useState<'propria'|'prop'>('prop')
+  const [newStage, setNewStage] = useState('Fase 1')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
+  const [month, setMonth] = useState(thisTradingMonth())
 
   const load = useCallback(async () => {
     try {
-      const accountSnap = await getDocs(collection(db, 'users', uid, 'tradingAccounts'))
-      const saved = accountSnap.docs.map(d => ({ ...d.data(), key:d.id } as TradingAccount))
-      const merged = TRADING_DEFAULTS.map(base => ({ ...base, ...(saved.find(a => a.key === base.key) || {}) }))
-      const extra = saved.filter(a => !TRADING_DEFAULTS.some(base => base.key === a.key))
-      setAccounts([...merged, ...extra])
+      const [accountSnap, historySnap] = await Promise.all([
+        getDocs(collection(db, 'users', uid, 'tradingAccounts')),
+        getDocs(collection(db, 'users', uid, 'tradingHistory')),
+      ])
+      setAccounts(accountSnap.docs.map(d => ({ ...d.data(), key:d.id } as TradingAccount)))
+      setHistory(historySnap.docs.map(d => ({ ...d.data(), id:d.id } as TradingSnapshot)).sort((a,b) => b.month.localeCompare(a.month)))
     } catch (error) {
       console.error('Erro ao carregar dados de trading:', error)
       setMessage('Não foi possível carregar os dados. Verifique a conexão e as regras do Firebase.')
-    } finally {
-      setLoading(false)
-    }
+    } finally { setLoading(false) }
   }, [uid])
 
   useEffect(() => { load() }, [load])
@@ -2218,24 +2203,57 @@ function TradingScreen({ uid }: { uid: string }) {
 
   const saveAccount = async () => {
     if (!draft) return
-    setSaving(true)
-    setMessage('')
-    const clean: TradingAccount = { ...draft, balanceUsd: draft.balanceUsd || 0, updatedAt:Date.now() }
+    setSaving(true); setMessage('')
+    const clean: TradingAccount = { ...draft, balanceUsd: draft.balanceUsd || 0, monthlyResultUsd: draft.monthlyResultUsd || 0, updatedAt:Date.now() }
+    const snapshotId = `${clean.key}_${month}`
+    const snapshot: TradingSnapshot = { id:snapshotId, accountKey:clean.key, accountName:clean.name, month, balanceUsd:clean.balanceUsd, monthlyResultUsd:clean.monthlyResultUsd, updatedAt:Date.now() }
     try {
-      await setDoc(doc(db, 'users', uid, 'tradingAccounts', clean.key), clean)
+      await Promise.all([
+        setDoc(doc(db, 'users', uid, 'tradingAccounts', clean.key), clean),
+        setDoc(doc(db, 'users', uid, 'tradingHistory', snapshotId), snapshot),
+      ])
       setAccounts(prev => prev.map(a => a.key === clean.key ? clean : a))
-      setEditingKey(null)
-      setDraft(null)
-      setMessage('Dados salvos.')
+      setHistory(prev => [snapshot, ...prev.filter(h => h.id !== snapshotId)].sort((a,b) => b.month.localeCompare(a.month)))
+      setEditingKey(null); setDraft(null); setMessage('Dados salvos.')
     } catch (error) {
       console.error('Erro ao salvar conta de trading:', error)
       setMessage('Erro ao salvar. Confira as permissões do Firestore e tente novamente.')
-    } finally {
-      setSaving(false)
+    } finally { setSaving(false) }
+  }
+
+  const createAccount = async () => {
+    const name = newName.trim()
+    if (!name) { setMessage('Informe o nome da conta.'); return }
+    const key = `${name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}-${Date.now().toString(36)}`
+    const account: TradingAccount = { key, name, kind:newKind, stage:newKind === 'prop' ? newStage : 'Capital próprio', balanceUsd:0, monthlyResultUsd:0 }
+    setSaving(true); setMessage('')
+    try {
+      await setDoc(doc(db, 'users', uid, 'tradingAccounts', key), account)
+      setAccounts(prev => [...prev, account]); setNewName(''); setNewAccountOpen(false); setMessage('Conta adicionada.')
+    } catch (error) {
+      console.error('Erro ao criar conta de trading:', error)
+      setMessage('Erro ao criar conta. Confira as permissões do Firestore.')
+    } finally { setSaving(false) }
+  }
+
+  const removeAccount = async (account: TradingAccount) => {
+    if (!window.confirm(`Excluir a conta “${account.name}”? O histórico mensal já salvo será mantido.`)) return
+    setMessage('')
+    try {
+      await deleteDoc(doc(db, 'users', uid, 'tradingAccounts', account.key))
+      setAccounts(prev => prev.filter(a => a.key !== account.key))
+      if (editingKey === account.key) { setEditingKey(null); setDraft(null) }
+      setMessage('Conta excluída. O histórico mensal foi mantido para comparação.')
+    } catch (error) {
+      console.error('Erro ao excluir conta de trading:', error)
+      setMessage('Erro ao excluir. Confira as permissões do Firestore.')
     }
   }
 
-  const stages = (stage: string) => stage.toLowerCase().includes('funded') ? '#00E5A0' : stage.toLowerCase().includes('fase') || stage.toLowerCase().includes('teste') ? '#FF9F43' : '#4E9EFF'
+  const stageColor = (stage: string) => stage.toLowerCase().includes('funded') ? '#00E5A0' : stage.toLowerCase().includes('fase') || stage.toLowerCase().includes('teste') ? '#FF9F43' : '#4E9EFF'
+  const monthHistory = history.filter(h => h.month === month)
+  const monthlyTotal = monthHistory.reduce((sum,h) => sum + h.monthlyResultUsd, 0)
+  const monthKeys = [...new Set([thisTradingMonth(), ...history.map(h => h.month)])].sort((a,b) => b.localeCompare(a))
 
   if (loading) return <LoadingScreen />
 
@@ -2244,54 +2262,63 @@ function TradingScreen({ uid }: { uid: string }) {
       <div style={{ marginBottom:16 }}>
         <div style={S.label}>Trading</div>
         <div style={{ fontSize:25, fontWeight:700, marginTop:4 }}>Minhas contas</div>
-        <div style={{ ...S.muted, marginTop:5 }}>Saldo atual e status das mesas proprietárias.</div>
+        <div style={{ ...S.muted, marginTop:5 }}>Saldo, resultado mensal e status das mesas proprietárias.</div>
+      </div>
+
+      <div style={{ ...S.card, marginBottom:12 }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, marginBottom:12 }}>
+          <div style={{ fontSize:14, fontWeight:600 }}>Resultado mensal</div>
+          <select aria-label="Mês do resultado" style={{ ...S.input, width:112, padding:'7px 8px', margin:0 }} value={month} onChange={e => setMonth(e.target.value)}>
+            {monthKeys.map(m => <option key={m} value={m}>{tradingMonth(m)}</option>)}
+          </select>
+        </div>
+        <div style={{ fontSize:25, fontWeight:700, color:monthlyTotal >= 0 ? '#00E5A0' : '#FF6B6B' }}>{monthlyTotal >= 0 ? '+' : ''}{tradingMoney(monthlyTotal)}</div>
+        <div style={{ ...S.muted, fontSize:11, marginTop:4 }}>Soma dos resultados informados nas contas em {tradingMonth(month)}.</div>
+        {history.length > 0 && <div style={{ marginTop:14, borderTop:'1px solid rgba(255,255,255,0.08)', paddingTop:10 }}>
+          <div style={{ ...S.label, marginBottom:8 }}>Comparativo dos meses</div>
+          {monthKeys.filter(m => history.some(h => h.month === m)).slice(0,6).map(m => {
+            const total = history.filter(h => h.month === m).reduce((sum,h) => sum + h.monthlyResultUsd, 0)
+            return <div key={m} style={{ display:'flex', justifyContent:'space-between', padding:'6px 0', fontSize:12 }}><span style={{ color:'rgba(255,255,255,0.65)' }}>{tradingMonth(m)}</span><span style={{ fontWeight:600, color:total >= 0 ? '#00E5A0' : '#FF6B6B' }}>{total >= 0 ? '+' : ''}{tradingMoney(total)}</span></div>
+          })}
+        </div>}
       </div>
 
       {accounts.map(account => {
         const isEditing = editingKey === account.key && draft?.key === account.key
-        return (
-          <div key={account.key} style={{ ...S.card, marginBottom:10 }}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
-              <div style={{ minWidth:0, flex:1 }}>
-                <div style={{ fontSize:15, fontWeight:600 }}>{account.name}</div>
-                <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginTop:3 }}>{account.kind === 'propria' ? 'Capital próprio' : 'Mesa proprietária'}</div>
-              </div>
-              {account.kind === 'prop' && <span style={{ fontSize:10, color:stages(account.stage), border:`1px solid ${stages(account.stage)}55`, padding:'4px 7px', borderRadius:20, whiteSpace:'nowrap' }}>{account.stage}</span>}
+        return <div key={account.key} style={{ ...S.card, marginBottom:10 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
+            <div style={{ minWidth:0, flex:1 }}>
+              <div style={{ fontSize:15, fontWeight:600 }}>{account.name}</div>
+              <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginTop:3 }}>{account.kind === 'propria' ? 'Capital próprio' : 'Mesa proprietária'}</div>
             </div>
-            {!isEditing ? (
-              <>
-                <div style={{ background:'#1C1D25', padding:12, borderRadius:9, marginTop:12 }}>
-                  <div style={S.muted}>Saldo</div>
-                  <div style={{ fontSize:19, fontWeight:700, marginTop:4 }}>{tradingMoney(account.balanceUsd)}</div>
-                </div>
-                {account.updatedAt && <div style={{ fontSize:9, color:'rgba(255,255,255,0.25)', marginTop:8 }}>Atualizado em {new Date(account.updatedAt).toLocaleDateString('pt-BR')}</div>}
-                <button style={{ ...S.btnGhost, marginTop:10 }} onClick={() => startEdit(account)}>Editar saldo{account.kind === 'prop' ? ' e status' : ''}</button>
-              </>
-            ) : (
-              <div style={{ marginTop:12 }}>
-                <label style={{ display:'block', marginBottom:12 }}>
-                  <div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Saldo (USD)</div>
-                  <input style={S.input} type="number" step="0.01" value={draft?.balanceUsd ?? 0} onChange={e => setDraft(prev => prev ? { ...prev, balanceUsd:tradingNumber(e.target.value) } : prev)} />
-                </label>
-                {account.kind === 'prop' && <label style={{ display:'block', marginBottom:12 }}>
-                  <div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Status da conta</div>
-                  <select style={S.input} value={draft?.stage ?? 'Fase 1'} onChange={e => setDraft(prev => prev ? { ...prev, stage:e.target.value } : prev)}>
-                    <option value="Fase 1">Fase 1</option>
-                    <option value="Fase 2">Fase 2</option>
-                    <option value="Funded">Funded</option>
-                  </select>
-                </label>}
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
-                  <button style={{ ...S.btn, opacity:saving ? 0.6 : 1 }} onClick={saveAccount} disabled={saving}>{saving ? 'Salvando...' : 'Salvar'}</button>
-                  <button style={{ ...S.btnGhost, marginTop:0 }} onClick={() => { setEditingKey(null); setDraft(null) }}>Cancelar</button>
-                </div>
-              </div>
-            )}
+            {account.kind === 'prop' && <span style={{ fontSize:10, color:stageColor(account.stage), border:`1px solid ${stageColor(account.stage)}55`, padding:'4px 7px', borderRadius:20, whiteSpace:'nowrap' }}>{account.stage}</span>}
           </div>
-        )
+          {!isEditing ? <>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:12 }}>
+              <div style={{ background:'#1C1D25', padding:11, borderRadius:9 }}><div style={S.muted}>Saldo</div><div style={{ fontSize:16, fontWeight:700, marginTop:4 }}>{tradingMoney(account.balanceUsd)}</div></div>
+              <div style={{ background:'#1C1D25', padding:11, borderRadius:9 }}><div style={S.muted}>Resultado do mês</div><div style={{ fontSize:14, fontWeight:700, marginTop:4, color:account.monthlyResultUsd >= 0 ? '#00E5A0' : '#FF6B6B' }}>{account.monthlyResultUsd >= 0 ? '+' : ''}{tradingMoney(account.monthlyResultUsd)}</div></div>
+            </div>
+            {account.updatedAt && <div style={{ fontSize:9, color:'rgba(255,255,255,0.25)', marginTop:8 }}>Atualizado em {new Date(account.updatedAt).toLocaleDateString('pt-BR')}</div>}
+            <button style={{ ...S.btnGhost, marginTop:10 }} onClick={() => startEdit(account)}>Editar conta</button>
+            <button style={{ ...S.btnGhost, marginTop:7, color:'#FF6B6B', borderColor:'rgba(255,107,107,0.3)' }} onClick={() => removeAccount(account)}>Excluir conta</button>
+          </> : <div style={{ marginTop:12 }}>
+            <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Saldo atual (USD)</div><input style={S.input} type="number" step="0.01" value={draft?.balanceUsd ?? 0} onChange={e => setDraft(prev => prev ? { ...prev, balanceUsd:tradingNumber(e.target.value) } : prev)} /></label>
+            <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Resultado deste mês (USD)</div><input style={S.input} type="number" step="0.01" value={draft?.monthlyResultUsd ?? 0} onChange={e => setDraft(prev => prev ? { ...prev, monthlyResultUsd:tradingNumber(e.target.value) } : prev)} /><div style={{ ...S.muted, fontSize:10, marginTop:4 }}>Use valor negativo se fechou o mês no prejuízo.</div></label>
+            {account.kind === 'prop' && <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Status da conta</div><select style={S.input} value={draft?.stage ?? 'Fase 1'} onChange={e => setDraft(prev => prev ? { ...prev, stage:e.target.value } : prev)}><option value="Fase 1">Fase 1</option><option value="Fase 2">Fase 2</option><option value="Funded">Funded</option></select></label>}
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}><button style={{ ...S.btn, opacity:saving ? 0.6 : 1 }} onClick={saveAccount} disabled={saving}>{saving ? 'Salvando...' : 'Salvar'}</button><button style={{ ...S.btnGhost, marginTop:0 }} onClick={() => { setEditingKey(null); setDraft(null) }}>Cancelar</button></div>
+          </div>}
+        </div>
       })}
-      {message && <div style={{ fontSize:12, color:message === 'Dados salvos.' ? '#00E5A0' : '#E24B4A', textAlign:'center', margin:'8px 0 16px' }}>{message}</div>}
-      <div style={{ ...S.muted, textAlign:'center', padding:'0 8px 14px' }}>Esses saldos ficam separados do patrimônio e dos relatórios financeiros.</div>
+
+      <button style={{ ...S.btn, marginTop:2, marginBottom:12 }} onClick={() => { setNewAccountOpen(v => !v); setMessage('') }}>{newAccountOpen ? 'Cancelar' : '+ Adicionar conta'}</button>
+      {newAccountOpen && <div style={{ ...S.card, marginBottom:12 }}>
+        <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Nome da conta / mesa</div><input style={S.input} placeholder="Ex.: FTMO 200k" value={newName} onChange={e => setNewName(e.target.value)} /></label>
+        <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Tipo</div><select style={S.input} value={newKind} onChange={e => setNewKind(e.target.value as 'propria'|'prop')}><option value="prop">Mesa proprietária</option><option value="propria">Capital próprio</option></select></label>
+        {newKind === 'prop' && <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Status inicial</div><select style={S.input} value={newStage} onChange={e => setNewStage(e.target.value)}><option value="Fase 1">Fase 1</option><option value="Fase 2">Fase 2</option><option value="Funded">Funded</option></select></label>}
+        <button style={{ ...S.btn, opacity:saving ? 0.6 : 1 }} onClick={createAccount} disabled={saving}>{saving ? 'Salvando...' : 'Criar conta'}</button>
+      </div>}
+      {message && <div style={{ fontSize:12, color:message.toLowerCase().includes('erro') || message.toLowerCase().includes('não foi') ? '#E24B4A' : '#00E5A0', textAlign:'center', margin:'8px 0 16px' }}>{message}</div>}
+      <div style={{ ...S.muted, textAlign:'center', padding:'0 8px 14px' }}>Dados de trading separados do patrimônio e dos relatórios financeiros.</div>
     </div>
   )
 }
