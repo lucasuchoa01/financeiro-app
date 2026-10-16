@@ -2265,7 +2265,7 @@ function TradingScreen({ uid }: { uid: string }) {
         <div style={{ ...S.muted, marginTop:5 }}>Saldo, resultado mensal e status das mesas proprietárias.</div>
       </div>
 
-      <div style={{ ...S.card, marginBottom:10, padding:14 }}>
+      <div style={{ ...S.card, marginBottom:12, padding:15, background:'linear-gradient(145deg, rgba(78,158,255,0.09), rgba(28,29,37,0.98) 48%)', border:'1px solid rgba(78,158,255,0.18)' }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, marginBottom:8 }}>
           <div style={{ fontSize:14, fontWeight:600 }}>Resultado mensal</div>
           <select aria-label="Mês do resultado" style={{ ...S.input, width:112, padding:'7px 8px', margin:0 }} value={month} onChange={e => setMonth(e.target.value)}>
@@ -2285,13 +2285,19 @@ function TradingScreen({ uid }: { uid: string }) {
 
       {accounts.map(account => {
         const isEditing = editingKey === account.key && draft?.key === account.key
-        return <div key={account.key} style={{ ...S.card, marginBottom:8, padding:12 }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
+        return <div key={account.key} style={{ ...S.card, marginBottom:9, padding:12, border:'1px solid rgba(255,255,255,0.09)', background:'linear-gradient(145deg, rgba(255,255,255,0.025), rgba(18,19,25,0.98) 60%)' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
             <div style={{ minWidth:0, flex:1 }}>
-              <div style={{ fontSize:14, fontWeight:600, lineHeight:1.25 }}>{account.name}</div>
-              <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginTop:3 }}>{account.kind === 'propria' ? 'Capital próprio' : 'Mesa proprietária'}</div>
+              <div style={{ display:'flex', alignItems:'center', gap:7, minWidth:0 }}>
+                <div style={{ fontSize:14, fontWeight:700, lineHeight:1.25, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{account.name}</div>
+                {!isEditing && <div style={{ display:'flex', alignItems:'center', gap:5, flexShrink:0 }}>
+                  <button title="Editar conta" aria-label="Editar conta" style={{ ...S.btnGhost, marginTop:0, width:28, height:26, minHeight:26, padding:0, display:'grid', placeItems:'center', borderRadius:8 }} onClick={() => startEdit(account)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg></button>
+                  <button title="Excluir conta" aria-label="Excluir conta" style={{ ...S.btnGhost, marginTop:0, width:28, height:26, minHeight:26, padding:0, display:'grid', placeItems:'center', color:'#FF6B6B', borderColor:'rgba(255,107,107,0.3)', borderRadius:8 }} onClick={() => removeAccount(account)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg></button>
+                </div>}
+              </div>
+              <div style={{ fontSize:11, color:'rgba(255,255,255,0.45)', marginTop:4 }}>{account.kind === 'propria' ? 'Capital próprio' : 'Mesa proprietária'}</div>
             </div>
-            {account.kind === 'prop' && <span style={{ fontSize:10, color:stageColor(account.stage), border:`1px solid ${stageColor(account.stage)}55`, padding:'4px 7px', borderRadius:20, whiteSpace:'nowrap' }}>{account.stage}</span>}
+            {account.kind === 'prop' && <span style={{ fontSize:10, color:stageColor(account.stage), background:`${stageColor(account.stage)}12`, border:`1px solid ${stageColor(account.stage)}55`, padding:'4px 7px', borderRadius:20, whiteSpace:'nowrap', marginTop:1 }}>{account.stage}</span>}
           </div>
           {!isEditing ? <>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, marginTop:8 }}>
@@ -2299,10 +2305,6 @@ function TradingScreen({ uid }: { uid: string }) {
               <div style={{ background:'#1C1D25', padding:'8px 9px', borderRadius:8 }}><div style={S.muted}>Resultado do mês</div><div style={{ fontSize:13, fontWeight:700, marginTop:3, color:account.monthlyResultUsd >= 0 ? '#00E5A0' : '#FF6B6B' }}>{account.monthlyResultUsd >= 0 ? '+' : ''}{tradingMoney(account.monthlyResultUsd)}</div></div>
             </div>
             {account.updatedAt && <div style={{ fontSize:9, color:'rgba(255,255,255,0.25)', marginTop:8 }}>Atualizado em {new Date(account.updatedAt).toLocaleDateString('pt-BR')}</div>}
-            <div style={{ display:'flex', justifyContent:'flex-end', gap:6, marginTop:7 }}>
-              <button title="Editar conta" aria-label="Editar conta" style={{ ...S.btnGhost, marginTop:0, width:34, height:30, minHeight:30, padding:0, display:'grid', placeItems:'center' }} onClick={() => startEdit(account)}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg></button>
-              <button title="Excluir conta" aria-label="Excluir conta" style={{ ...S.btnGhost, marginTop:0, width:34, height:30, minHeight:30, padding:0, display:'grid', placeItems:'center', color:'#FF6B6B', borderColor:'rgba(255,107,107,0.3)' }} onClick={() => removeAccount(account)}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg></button>
-            </div>
           </> : <div style={{ marginTop:10 }}>
             <label style={{ display:'block', marginBottom:10 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Nome da conta</div><input style={S.input} value={draft?.name ?? ''} onChange={e => setDraft(prev => prev ? { ...prev, name:e.target.value } : prev)} /></label>
             <label style={{ display:'block', marginBottom:10 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Saldo atual (USD)</div><input style={S.input} type="number" step="0.01" value={draft?.balanceUsd ?? 0} onChange={e => setDraft(prev => prev ? { ...prev, balanceUsd:tradingNumber(e.target.value) } : prev)} /></label>
