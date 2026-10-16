@@ -2326,8 +2326,8 @@ function TradingScreen({ uid }: { uid: string }) {
           </div>
           {!isEditing ? <>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, marginTop:8 }}>
-              <div style={{ background:'#1C1D25', padding:'8px 9px', borderRadius:8 }}><div style={S.muted}>Saldo</div><div style={{ fontSize:15, fontWeight:700, marginTop:3 }}>{tradingMoney(account.balanceUsd)}</div></div>
-              <div style={{ background:'#1C1D25', padding:'8px 9px', borderRadius:8 }}><div style={S.muted}>Resultado do mês</div><div style={{ fontSize:13, fontWeight:700, marginTop:3, color:account.monthlyResultUsd >= 0 ? '#00E5A0' : '#FF6B6B' }}>{account.monthlyResultUsd >= 0 ? '+' : ''}{tradingMoney(account.monthlyResultUsd)}</div><div style={{ ...S.muted, fontSize:9, marginTop:2 }}>Inicial: {tradingMoney(account.monthlyStartBalanceUsd ?? 0)}</div></div>
+              <div style={{ background:'#1C1D25', padding:'8px 9px', borderRadius:8 }}><div style={S.muted}>Saldo atual</div><div style={{ fontSize:15, fontWeight:700, marginTop:3 }}>{tradingMoney(account.balanceUsd)}</div><div style={{ ...S.muted, fontSize:9, marginTop:3 }}>Saldo inicial: {tradingMoney(account.monthlyStartBalanceUsd ?? 0)}</div></div>
+              <div style={{ background:'#1C1D25', padding:'8px 9px', borderRadius:8 }}><div style={S.muted}>Resultado do mês</div><div style={{ fontSize:13, fontWeight:700, marginTop:3, color:account.monthlyResultUsd >= 0 ? '#00E5A0' : '#FF6B6B' }}>{account.monthlyResultUsd >= 0 ? '+' : ''}{tradingMoney(account.monthlyResultUsd)}</div></div>
             </div>
             {account.updatedAt && <div style={{ fontSize:9, color:'rgba(255,255,255,0.25)', marginTop:8 }}>Atualizado em {new Date(account.updatedAt).toLocaleDateString('pt-BR')}</div>}
           </> : <div style={{ marginTop:10 }}>
