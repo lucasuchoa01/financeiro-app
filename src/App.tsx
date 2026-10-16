@@ -2265,44 +2265,47 @@ function TradingScreen({ uid }: { uid: string }) {
         <div style={{ ...S.muted, marginTop:5 }}>Saldo, resultado mensal e status das mesas proprietárias.</div>
       </div>
 
-      <div style={{ ...S.card, marginBottom:12 }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, marginBottom:12 }}>
+      <div style={{ ...S.card, marginBottom:10, padding:14 }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, marginBottom:8 }}>
           <div style={{ fontSize:14, fontWeight:600 }}>Resultado mensal</div>
           <select aria-label="Mês do resultado" style={{ ...S.input, width:112, padding:'7px 8px', margin:0 }} value={month} onChange={e => setMonth(e.target.value)}>
             {monthKeys.map(m => <option key={m} value={m}>{tradingMonth(m)}</option>)}
           </select>
         </div>
-        <div style={{ fontSize:25, fontWeight:700, color:monthlyTotal >= 0 ? '#00E5A0' : '#FF6B6B' }}>{monthlyTotal >= 0 ? '+' : ''}{tradingMoney(monthlyTotal)}</div>
+        <div style={{ fontSize:23, fontWeight:700, color:monthlyTotal >= 0 ? '#00E5A0' : '#FF6B6B' }}>{monthlyTotal >= 0 ? '+' : ''}{tradingMoney(monthlyTotal)}</div>
         <div style={{ ...S.muted, fontSize:11, marginTop:4 }}>Soma dos resultados informados nas contas em {tradingMonth(month)}.</div>
-        {history.length > 0 && <div style={{ marginTop:14, borderTop:'1px solid rgba(255,255,255,0.08)', paddingTop:10 }}>
+        {history.length > 0 && <div style={{ marginTop:10, borderTop:'1px solid rgba(255,255,255,0.08)', paddingTop:8 }}>
           <div style={{ ...S.label, marginBottom:8 }}>Comparativo dos meses</div>
           {monthKeys.filter(m => history.some(h => h.month === m)).slice(0,6).map(m => {
             const total = history.filter(h => h.month === m).reduce((sum,h) => sum + h.monthlyResultUsd, 0)
-            return <div key={m} style={{ display:'flex', justifyContent:'space-between', padding:'6px 0', fontSize:12 }}><span style={{ color:'rgba(255,255,255,0.65)' }}>{tradingMonth(m)}</span><span style={{ fontWeight:600, color:total >= 0 ? '#00E5A0' : '#FF6B6B' }}>{total >= 0 ? '+' : ''}{tradingMoney(total)}</span></div>
+            return <div key={m} style={{ display:'flex', justifyContent:'space-between', padding:'4px 0', fontSize:11 }}><span style={{ color:'rgba(255,255,255,0.65)' }}>{tradingMonth(m)}</span><span style={{ fontWeight:600, color:total >= 0 ? '#00E5A0' : '#FF6B6B' }}>{total >= 0 ? '+' : ''}{tradingMoney(total)}</span></div>
           })}
         </div>}
       </div>
 
       {accounts.map(account => {
         const isEditing = editingKey === account.key && draft?.key === account.key
-        return <div key={account.key} style={{ ...S.card, marginBottom:10 }}>
+        return <div key={account.key} style={{ ...S.card, marginBottom:8, padding:12 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
             <div style={{ minWidth:0, flex:1 }}>
-              <div style={{ fontSize:15, fontWeight:600 }}>{account.name}</div>
+              <div style={{ fontSize:14, fontWeight:600, lineHeight:1.25 }}>{account.name}</div>
               <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginTop:3 }}>{account.kind === 'propria' ? 'Capital próprio' : 'Mesa proprietária'}</div>
             </div>
             {account.kind === 'prop' && <span style={{ fontSize:10, color:stageColor(account.stage), border:`1px solid ${stageColor(account.stage)}55`, padding:'4px 7px', borderRadius:20, whiteSpace:'nowrap' }}>{account.stage}</span>}
           </div>
           {!isEditing ? <>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:12 }}>
-              <div style={{ background:'#1C1D25', padding:11, borderRadius:9 }}><div style={S.muted}>Saldo</div><div style={{ fontSize:16, fontWeight:700, marginTop:4 }}>{tradingMoney(account.balanceUsd)}</div></div>
-              <div style={{ background:'#1C1D25', padding:11, borderRadius:9 }}><div style={S.muted}>Resultado do mês</div><div style={{ fontSize:14, fontWeight:700, marginTop:4, color:account.monthlyResultUsd >= 0 ? '#00E5A0' : '#FF6B6B' }}>{account.monthlyResultUsd >= 0 ? '+' : ''}{tradingMoney(account.monthlyResultUsd)}</div></div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, marginTop:8 }}>
+              <div style={{ background:'#1C1D25', padding:'8px 9px', borderRadius:8 }}><div style={S.muted}>Saldo</div><div style={{ fontSize:15, fontWeight:700, marginTop:3 }}>{tradingMoney(account.balanceUsd)}</div></div>
+              <div style={{ background:'#1C1D25', padding:'8px 9px', borderRadius:8 }}><div style={S.muted}>Resultado do mês</div><div style={{ fontSize:13, fontWeight:700, marginTop:3, color:account.monthlyResultUsd >= 0 ? '#00E5A0' : '#FF6B6B' }}>{account.monthlyResultUsd >= 0 ? '+' : ''}{tradingMoney(account.monthlyResultUsd)}</div></div>
             </div>
             {account.updatedAt && <div style={{ fontSize:9, color:'rgba(255,255,255,0.25)', marginTop:8 }}>Atualizado em {new Date(account.updatedAt).toLocaleDateString('pt-BR')}</div>}
-            <button style={{ ...S.btnGhost, marginTop:10 }} onClick={() => startEdit(account)}>Editar conta</button>
-            <button style={{ ...S.btnGhost, marginTop:7, color:'#FF6B6B', borderColor:'rgba(255,107,107,0.3)' }} onClick={() => removeAccount(account)}>Excluir conta</button>
-          </> : <div style={{ marginTop:12 }}>
-            <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Saldo atual (USD)</div><input style={S.input} type="number" step="0.01" value={draft?.balanceUsd ?? 0} onChange={e => setDraft(prev => prev ? { ...prev, balanceUsd:tradingNumber(e.target.value) } : prev)} /></label>
+            <div style={{ display:'flex', justifyContent:'flex-end', gap:6, marginTop:7 }}>
+              <button title="Editar conta" aria-label="Editar conta" style={{ ...S.btnGhost, marginTop:0, width:34, height:30, minHeight:30, padding:0, display:'grid', placeItems:'center' }} onClick={() => startEdit(account)}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg></button>
+              <button title="Excluir conta" aria-label="Excluir conta" style={{ ...S.btnGhost, marginTop:0, width:34, height:30, minHeight:30, padding:0, display:'grid', placeItems:'center', color:'#FF6B6B', borderColor:'rgba(255,107,107,0.3)' }} onClick={() => removeAccount(account)}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg></button>
+            </div>
+          </> : <div style={{ marginTop:10 }}>
+            <label style={{ display:'block', marginBottom:10 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Nome da conta</div><input style={S.input} value={draft?.name ?? ''} onChange={e => setDraft(prev => prev ? { ...prev, name:e.target.value } : prev)} /></label>
+            <label style={{ display:'block', marginBottom:10 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Saldo atual (USD)</div><input style={S.input} type="number" step="0.01" value={draft?.balanceUsd ?? 0} onChange={e => setDraft(prev => prev ? { ...prev, balanceUsd:tradingNumber(e.target.value) } : prev)} /></label>
             <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Resultado deste mês (USD)</div><input style={S.input} type="number" step="0.01" value={draft?.monthlyResultUsd ?? 0} onChange={e => setDraft(prev => prev ? { ...prev, monthlyResultUsd:tradingNumber(e.target.value) } : prev)} /><div style={{ ...S.muted, fontSize:10, marginTop:4 }}>Use valor negativo se fechou o mês no prejuízo.</div></label>
             {account.kind === 'prop' && <label style={{ display:'block', marginBottom:12 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Status da conta</div><select style={S.input} value={draft?.stage ?? 'Fase 1'} onChange={e => setDraft(prev => prev ? { ...prev, stage:e.target.value } : prev)}><option value="Fase 1">Fase 1</option><option value="Fase 2">Fase 2</option><option value="Funded">Funded</option></select></label>}
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}><button style={{ ...S.btn, opacity:saving ? 0.6 : 1 }} onClick={saveAccount} disabled={saving}>{saving ? 'Salvando...' : 'Salvar'}</button><button style={{ ...S.btnGhost, marginTop:0 }} onClick={() => { setEditingKey(null); setDraft(null) }}>Cancelar</button></div>
