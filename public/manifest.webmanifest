@@ -1,0 +1,17 @@
+{
+  "id": "/",
+  "name": "Financeiro Pessoal - Lucas",
+  "short_name": "Financeiro",
+  "description": "Aplicativo de controle financeiro pessoal",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#0A0B0F",
+  "theme_color": "#0A0B0F",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
