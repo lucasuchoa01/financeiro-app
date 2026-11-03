@@ -167,8 +167,8 @@ const generateMonths = () => {
 }
 
 const S = {
-  app: { display:'flex', flexDirection:'column' as const, height:'100%', width:'100%', maxWidth:430, margin:'0 auto', background:'#0A0B0F', position:'relative' as const },
-  screen: { flex:1, overflowY:'auto' as const, padding:'20px 16px 90px' },
+  app: { display:'flex', flexDirection:'column' as const, height:'100dvh', minHeight:0, width:'100%', maxWidth:430, margin:'0 auto', background:'#0A0B0F', position:'relative' as const, overflow:'hidden' as const },
+  screen: { flex:'1 1 auto', minHeight:0, overflowY:'auto' as const, WebkitOverflowScrolling:'touch' as const, padding:'20px 16px calc(100px + env(safe-area-inset-bottom))' },
   card: { background:'#13141A', border:'0.5px solid rgba(255,255,255,0.07)', borderRadius:16, padding:16, marginBottom:10 },
   label: { fontSize:11, color:'#4E9EFF', letterSpacing:'0.12em', textTransform:'uppercase' as const, marginBottom:4, fontFamily:"'DM Mono',monospace" },
   muted: { color:'rgba(255,255,255,0.4)', fontSize:12 },
@@ -176,7 +176,7 @@ const S = {
   select: { width:'100%', padding:'12px 14px', background:'#1C1D25', border:'0.5px solid rgba(255,255,255,0.12)', borderRadius:12, color:'#fff', fontSize:15, outline:'none', marginBottom:12, appearance:'none' as const },
   btn: { width:'100%', padding:'14px', background:'#4E9EFF', border:'none', borderRadius:12, color:'#fff', fontSize:15, fontWeight:600, cursor:'pointer' },
   btnGhost: { width:'100%', padding:'12px', background:'transparent', border:'0.5px solid rgba(255,255,255,0.15)', borderRadius:12, color:'rgba(255,255,255,0.6)', fontSize:14, cursor:'pointer', marginTop:8 },
-  nav: { position:'absolute' as const, bottom:0, left:0, right:0, background:'#0D0E14', borderTop:'0.5px solid rgba(255,255,255,0.07)', display:'grid', gridTemplateColumns:'repeat(6,1fr)', zIndex:100 },
+  nav: { position:'absolute' as const, bottom:0, left:0, right:0, paddingBottom:'env(safe-area-inset-bottom)', minHeight:64, background:'#0D0E14', borderTop:'0.5px solid rgba(255,255,255,0.07)', display:'grid', gridTemplateColumns:'repeat(6, minmax(0, 1fr))', zIndex:100, boxSizing:'border-box' as const },
   navBtn: { padding:'8px 0 6px', border:'none', background:'transparent', color:'rgba(255,255,255,0.3)', fontSize:9, fontFamily:"'DM Sans',sans-serif", cursor:'pointer', display:'flex', flexDirection:'column' as const, alignItems:'center', gap:3 },
 }
 
@@ -2395,7 +2395,7 @@ export default function App() {
   ]
 
   return (
-    <div style={{ height:'100vh', background:'#0A0B0F', display:'flex', justifyContent:'center' }}>
+    <div style={{ height:'100dvh', minHeight:0, background:'#0A0B0F', display:'flex', justifyContent:'center', overflow:'hidden' }}>
       <div style={S.app}>
         {screen==='painel' && <PainelScreen uid={user.uid} />}
         {screen==='gastos' && <GastosScreen uid={user.uid} />}
