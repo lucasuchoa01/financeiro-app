@@ -167,8 +167,8 @@ const generateMonths = () => {
 }
 
 const S = {
-  app: { display:'flex', flexDirection:'column' as const, height:'100dvh', minHeight:0, width:'100%', maxWidth:430, margin:'0 auto', background:'#0A0B0F', position:'relative' as const, overflow:'hidden' as const },
-  screen: { flex:'1 1 auto', minHeight:0, overflowY:'auto' as const, WebkitOverflowScrolling:'touch' as const, padding:'20px 16px calc(100px + env(safe-area-inset-bottom))' },
+  app: { display:'flex', flexDirection:'column' as const, height:'100%', width:'100%', maxWidth:430, margin:'0 auto', background:'#0A0B0F', position:'relative' as const },
+  screen: { flex:1, overflowY:'auto' as const, padding:'20px 16px 90px' },
   card: { background:'#13141A', border:'0.5px solid rgba(255,255,255,0.07)', borderRadius:16, padding:16, marginBottom:10 },
   label: { fontSize:11, color:'#4E9EFF', letterSpacing:'0.12em', textTransform:'uppercase' as const, marginBottom:4, fontFamily:"'DM Mono',monospace" },
   muted: { color:'rgba(255,255,255,0.4)', fontSize:12 },
@@ -176,7 +176,7 @@ const S = {
   select: { width:'100%', padding:'12px 14px', background:'#1C1D25', border:'0.5px solid rgba(255,255,255,0.12)', borderRadius:12, color:'#fff', fontSize:15, outline:'none', marginBottom:12, appearance:'none' as const },
   btn: { width:'100%', padding:'14px', background:'#4E9EFF', border:'none', borderRadius:12, color:'#fff', fontSize:15, fontWeight:600, cursor:'pointer' },
   btnGhost: { width:'100%', padding:'12px', background:'transparent', border:'0.5px solid rgba(255,255,255,0.15)', borderRadius:12, color:'rgba(255,255,255,0.6)', fontSize:14, cursor:'pointer', marginTop:8 },
-  nav: { position:'absolute' as const, bottom:0, left:0, right:0, paddingBottom:'env(safe-area-inset-bottom)', minHeight:64, background:'#0D0E14', borderTop:'0.5px solid rgba(255,255,255,0.07)', display:'grid', gridTemplateColumns:'repeat(6, minmax(0, 1fr))', zIndex:100, boxSizing:'border-box' as const },
+  nav: { position:'absolute' as const, bottom:0, left:0, right:0, background:'#0D0E14', borderTop:'0.5px solid rgba(255,255,255,0.07)', display:'grid', gridTemplateColumns:'repeat(6,1fr)', zIndex:100 },
   navBtn: { padding:'8px 0 6px', border:'none', background:'transparent', color:'rgba(255,255,255,0.3)', fontSize:9, fontFamily:"'DM Sans',sans-serif", cursor:'pointer', display:'flex', flexDirection:'column' as const, alignItems:'center', gap:3 },
 }
 
@@ -2201,23 +2201,32 @@ function TradingScreen({ uid }: { uid: string }) {
   useEffect(() => { load() }, [load])
 
   const startEdit = (account: TradingAccount) => {
+    const savedMonth = history.find(h => h.accountKey === account.key && h.month === month)
+    const base = month === thisTradingMonth() ? account : savedMonth ? { ...account, balanceUsd:savedMonth.balanceUsd, monthlyStartBalanceUsd:savedMonth.monthlyStartBalanceUsd, monthlyResultUsd:savedMonth.monthlyResultUsd, updatedAt:savedMonth.updatedAt } : { ...account, balanceUsd:0, monthlyStartBalanceUsd:0, monthlyResultUsd:0 }
     setEditingKey(account.key)
-    setDraft({ ...account })
+    setDraft({ ...base })
     setMessage('')
   }
 
   const saveAccount = async () => {
     if (!draft) return
     setSaving(true); setMessage('')
-    const clean: TradingAccount = { ...draft, balanceUsd: draft.balanceUsd || 0, monthlyStartBalanceUsd: draft.monthlyStartBalanceUsd || 0, monthlyResultUsd: (draft.balanceUsd || 0) - (draft.monthlyStartBalanceUsd || 0), updatedAt:Date.now() }
+    const now = Date.now()
+    const clean: TradingAccount = { ...draft, balanceUsd: draft.balanceUsd || 0, monthlyStartBalanceUsd: draft.monthlyStartBalanceUsd || 0, monthlyResultUsd: (draft.balanceUsd || 0) - (draft.monthlyStartBalanceUsd || 0), updatedAt:now }
     const snapshotId = `${clean.key}_${month}`
-    const snapshot: TradingSnapshot = { id:snapshotId, accountKey:clean.key, accountName:clean.name, month, balanceUsd:clean.balanceUsd, monthlyStartBalanceUsd:clean.monthlyStartBalanceUsd || 0, monthlyResultUsd:clean.monthlyResultUsd, updatedAt:Date.now() }
+    const snapshot: TradingSnapshot = { id:snapshotId, accountKey:clean.key, accountName:clean.name, month, balanceUsd:clean.balanceUsd, monthlyStartBalanceUsd:clean.monthlyStartBalanceUsd || 0, monthlyResultUsd:clean.monthlyResultUsd, updatedAt:now }
+    // Saldo atual da conta-mestra só é atualizado ao salvar o mês corrente.
+    // Meses anteriores ficam exclusivamente no tradingHistory.
+    const currentAccount = accounts.find(a => a.key === clean.key)
+    const accountToPersist: TradingAccount = month === thisTradingMonth()
+      ? clean
+      : { ...clean, balanceUsd:currentAccount?.balanceUsd ?? 0, monthlyStartBalanceUsd:currentAccount?.monthlyStartBalanceUsd ?? 0, monthlyResultUsd:currentAccount?.monthlyResultUsd ?? 0, updatedAt:currentAccount?.updatedAt ?? clean.updatedAt }
     try {
       await Promise.all([
-        setDoc(doc(db, 'users', uid, 'tradingAccounts', clean.key), clean),
+        setDoc(doc(db, 'users', uid, 'tradingAccounts', clean.key), accountToPersist),
         setDoc(doc(db, 'users', uid, 'tradingHistory', snapshotId), snapshot),
       ])
-      setAccounts(prev => prev.map(a => a.key === clean.key ? clean : a))
+      setAccounts(prev => prev.map(a => a.key === clean.key ? accountToPersist : a))
       setHistory(prev => [snapshot, ...prev.filter(h => h.id !== snapshotId)].sort((a,b) => b.month.localeCompare(a.month)))
       setEditingKey(null); setDraft(null); setMessage('Dados salvos.')
     } catch (error) {
@@ -2307,6 +2316,8 @@ function TradingScreen({ uid }: { uid: string }) {
       </div>
 
       {accounts.slice().sort((a,b) => (a.order ?? 0) - (b.order ?? 0)).map(account => {
+        const saved = history.find(h => h.accountKey === account.key && h.month === month)
+        const shownAccount: TradingAccount = month === thisTradingMonth() ? account : saved ? { ...account, balanceUsd:saved.balanceUsd, monthlyStartBalanceUsd:saved.monthlyStartBalanceUsd, monthlyResultUsd:saved.monthlyResultUsd, updatedAt:saved.updatedAt } : { ...account, balanceUsd:0, monthlyStartBalanceUsd:0, monthlyResultUsd:0, updatedAt:undefined }
         const isEditing = editingKey === account.key && draft?.key === account.key
         return <div key={account.key} style={{ ...S.card, marginBottom:9, padding:12, border:'1px solid rgba(255,255,255,0.09)', background:'linear-gradient(145deg, rgba(255,255,255,0.025), rgba(18,19,25,0.98) 60%)' }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
@@ -2326,10 +2337,11 @@ function TradingScreen({ uid }: { uid: string }) {
           </div>
           {!isEditing ? <>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, marginTop:8 }}>
-              <div style={{ background:'#1C1D25', padding:'8px 9px', borderRadius:8 }}><div style={S.muted}>Saldo atual</div><div style={{ fontSize:15, fontWeight:700, marginTop:3 }}>{tradingMoney(account.balanceUsd)}</div><div style={{ ...S.muted, fontSize:9, marginTop:3 }}>Saldo inicial: {tradingMoney(account.monthlyStartBalanceUsd ?? 0)}</div></div>
-              <div style={{ background:'#1C1D25', padding:'8px 9px', borderRadius:8 }}><div style={S.muted}>Resultado do mês</div><div style={{ fontSize:13, fontWeight:700, marginTop:3, color:account.monthlyResultUsd >= 0 ? '#00E5A0' : '#FF6B6B' }}>{account.monthlyResultUsd >= 0 ? '+' : ''}{tradingMoney(account.monthlyResultUsd)}</div></div>
+              <div style={{ background:'#1C1D25', padding:'8px 9px', borderRadius:8 }}><div style={S.muted}>Saldo atual</div><div style={{ fontSize:15, fontWeight:700, marginTop:3 }}>{tradingMoney(shownAccount.balanceUsd)}</div><div style={{ ...S.muted, fontSize:9, marginTop:3 }}>Saldo inicial: {tradingMoney(shownAccount.monthlyStartBalanceUsd ?? 0)}</div></div>
+              <div style={{ background:'#1C1D25', padding:'8px 9px', borderRadius:8 }}><div style={S.muted}>Resultado do mês</div><div style={{ fontSize:13, fontWeight:700, marginTop:3, color:shownAccount.monthlyResultUsd >= 0 ? '#00E5A0' : '#FF6B6B' }}>{shownAccount.monthlyResultUsd >= 0 ? '+' : ''}{tradingMoney(shownAccount.monthlyResultUsd)}</div></div>
             </div>
-            {account.updatedAt && <div style={{ fontSize:9, color:'rgba(255,255,255,0.25)', marginTop:8 }}>Atualizado em {new Date(account.updatedAt).toLocaleDateString('pt-BR')}</div>}
+            {shownAccount.updatedAt && <div style={{ fontSize:9, color:'rgba(255,255,255,0.25)', marginTop:8 }}>Atualizado em {new Date(shownAccount.updatedAt).toLocaleDateString('pt-BR')}</div>}
+            {month !== thisTradingMonth() && !saved && <div style={{ fontSize:9, color:'rgba(255,255,255,0.35)', marginTop:8 }}>Sem saldo registrado em {tradingMonth(month)}.</div>}
           </> : <div style={{ marginTop:10 }}>
             <label style={{ display:'block', marginBottom:10 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Nome da conta</div><input style={S.input} value={draft?.name ?? ''} onChange={e => setDraft(prev => prev ? { ...prev, name:e.target.value } : prev)} /></label>
             <label style={{ display:'block', marginBottom:10 }}><div style={{ fontSize:11, color:'rgba(255,255,255,0.55)', marginBottom:5 }}>Saldo inicial do mês (USD)</div><input style={S.input} type="number" step="0.01" value={draft?.monthlyStartBalanceUsd ?? 0} onChange={e => setDraft(prev => prev ? { ...prev, monthlyStartBalanceUsd:tradingNumber(e.target.value), monthlyResultUsd:(prev.balanceUsd || 0)-tradingNumber(e.target.value) } : prev)} /></label>
@@ -2395,7 +2407,7 @@ export default function App() {
   ]
 
   return (
-    <div style={{ height:'100dvh', minHeight:0, background:'#0A0B0F', display:'flex', justifyContent:'center', overflow:'hidden' }}>
+    <div style={{ height:'100vh', background:'#0A0B0F', display:'flex', justifyContent:'center' }}>
       <div style={S.app}>
         {screen==='painel' && <PainelScreen uid={user.uid} />}
         {screen==='gastos' && <GastosScreen uid={user.uid} />}
