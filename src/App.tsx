@@ -2413,8 +2413,11 @@ function TradingScreen({ uid }: { uid: string }) {
   }
 
   const stageColor = (stage: string) => stage.toLowerCase().includes('funded') ? '#00E5A0' : stage.toLowerCase().includes('fase') || stage.toLowerCase().includes('teste') ? '#FF9F43' : '#4E9EFF'
-  const monthHistory = history.filter(h => h.month === month && h.phase !== 'evaluation-archive')
+  // Inclui o resultado arquivado da avaliação no total do mês da promoção.
+  // Registros arquivados usam o resultado salvo na época, sem recalcular pela fase atual (Funded).
+  const monthHistory = history.filter(h => h.month === month)
   const monthlyTotal = monthHistory.reduce((sum,h) => {
+    if (h.phase === 'evaluation-archive') return sum + h.monthlyResultUsd
     const account = accounts.find(a => a.key === h.accountKey)
     return sum + (account ? calculateAccountResult(account, month, h.balanceUsd, h.monthlyStartBalanceUsd) : h.monthlyResultUsd)
   }, 0)
@@ -2443,6 +2446,7 @@ function TradingScreen({ uid }: { uid: string }) {
           <div style={{ ...S.label, marginBottom:8 }}>Comparativo dos meses</div>
           {monthKeys.filter(m => history.some(h => h.month === m)).slice(0,6).map(m => {
             const total = history.filter(h => h.month === m).reduce((sum,h) => {
+              if (h.phase === 'evaluation-archive') return sum + h.monthlyResultUsd
               const account = accounts.find(a => a.key === h.accountKey)
               return sum + (account ? calculateAccountResult(account, m, h.balanceUsd, h.monthlyStartBalanceUsd) : h.monthlyResultUsd)
             }, 0)
