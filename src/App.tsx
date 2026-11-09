@@ -2218,11 +2218,27 @@ function TradingScreen({ uid }: { uid: string }) {
 
   useEffect(() => { load() }, [load])
 
+  const previousTradingMonth = (key: string) => {
+    const [year, monthNumber] = key.split('-').map(Number)
+    const date = new Date(year, monthNumber - 2, 1)
+    return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`
+  }
+
+  // Para capital próprio, o mês começa com o saldo de fechamento do mês anterior.
+  // Se ainda não houver histórico anterior, preserva o saldo inicial já cadastrado.
+  const getOpeningBalance = (accountKey: string, selectedMonth: string, fallback: number) => {
+    const previous = history.find(h => h.accountKey === accountKey && h.month === previousTradingMonth(selectedMonth))
+    return previous ? previous.balanceUsd : fallback
+  }
+
   const startEdit = (account: TradingAccount) => {
     const savedMonth = history.find(h => h.accountKey === account.key && h.month === month)
     const base = month === thisTradingMonth() ? account : savedMonth ? { ...account, balanceUsd:savedMonth.balanceUsd, monthlyStartBalanceUsd:savedMonth.monthlyStartBalanceUsd, monthlyResultUsd:savedMonth.monthlyResultUsd, updatedAt:savedMonth.updatedAt } : { ...account, balanceUsd:0, monthlyStartBalanceUsd:0, monthlyResultUsd:0 }
+    const openingBalance = account.kind === 'propria'
+      ? getOpeningBalance(account.key, month, base.monthlyStartBalanceUsd ?? 0)
+      : (base.monthlyStartBalanceUsd ?? 0)
     setEditingKey(account.key)
-    setDraft({ ...base })
+    setDraft({ ...base, monthlyStartBalanceUsd:openingBalance })
     setMessage('')
   }
 
@@ -2230,11 +2246,14 @@ function TradingScreen({ uid }: { uid: string }) {
     movements.filter(m => m.accountKey === accountKey && m.month === selectedMonth)
 
   const calculateAccountResult = (account: TradingAccount, selectedMonth: string, balance: number, startBalance: number) => {
-    if (account.kind === 'prop') return balance - startBalance
+    const effectiveStartBalance = account.kind === 'propria'
+      ? getOpeningBalance(account.key, selectedMonth, startBalance)
+      : startBalance
+    if (account.kind === 'prop') return balance - effectiveStartBalance
     const monthMovements = movementsFor(account.key, selectedMonth)
     const deposits = monthMovements.filter(m => m.type === 'deposit').reduce((sum,m) => sum + m.amount, 0)
     const withdrawals = monthMovements.filter(m => m.type === 'withdrawal').reduce((sum,m) => sum + m.amount, 0)
-    return balance - startBalance - deposits + withdrawals
+    return balance - effectiveStartBalance - deposits + withdrawals
   }
 
   const saveMovement = async (account: TradingAccount) => {
@@ -2264,7 +2283,10 @@ function TradingScreen({ uid }: { uid: string }) {
     if (!draft) return
     setSaving(true); setMessage('')
     const now = Date.now()
-    const clean: TradingAccount = { ...draft, balanceUsd: draft.balanceUsd || 0, monthlyStartBalanceUsd: draft.monthlyStartBalanceUsd || 0, monthlyResultUsd: calculateAccountResult(draft, month, draft.balanceUsd || 0, draft.monthlyStartBalanceUsd || 0), updatedAt:now }
+    const openingBalance = draft.kind === 'propria'
+      ? getOpeningBalance(draft.key, month, draft.monthlyStartBalanceUsd || 0)
+      : (draft.monthlyStartBalanceUsd || 0)
+    const clean: TradingAccount = { ...draft, balanceUsd: draft.balanceUsd || 0, monthlyStartBalanceUsd:openingBalance, monthlyResultUsd: calculateAccountResult(draft, month, draft.balanceUsd || 0, openingBalance), updatedAt:now }
     const snapshotId = `${clean.key}_${month}`
     const snapshot: TradingSnapshot = { id:snapshotId, accountKey:clean.key, accountName:clean.name, month, balanceUsd:clean.balanceUsd, monthlyStartBalanceUsd:clean.monthlyStartBalanceUsd || 0, monthlyResultUsd:clean.monthlyResultUsd, updatedAt:now }
     // Saldo atual da conta-mestra só é atualizado ao salvar o mês corrente.
@@ -2395,7 +2417,7 @@ function TradingScreen({ uid }: { uid: string }) {
           </div>
           {!isEditing ? <>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, marginTop:8 }}>
-              <div style={{ background:'#1C1D25', padding:'8px 9px', borderRadius:8 }}><div style={S.muted}>Saldo atual</div><div style={{ fontSize:15, fontWeight:700, marginTop:3 }}>{tradingMoney(shownAccount.balanceUsd)}</div><div style={{ ...S.muted, fontSize:9, marginTop:3 }}>Saldo inicial: {tradingMoney(shownAccount.monthlyStartBalanceUsd ?? 0)}</div></div>
+              <div style={{ background:'#1C1D25', padding:'8px 9px', borderRadius:8 }}><div style={S.muted}>Saldo atual</div><div style={{ fontSize:15, fontWeight:700, marginTop:3 }}>{tradingMoney(shownAccount.balanceUsd)}</div><div style={{ ...S.muted, fontSize:9, marginTop:3 }}>Saldo inicial: {tradingMoney(account.kind === 'propria' ? getOpeningBalance(account.key, month, shownAccount.monthlyStartBalanceUsd ?? 0) : (shownAccount.monthlyStartBalanceUsd ?? 0))}</div></div>
               <div style={{ background:'#1C1D25', padding:'8px 9px', borderRadius:8 }}><div style={S.muted}>Resultado do mês</div><div style={{ fontSize:13, fontWeight:700, marginTop:3, color:calculateAccountResult(account, month, shownAccount.balanceUsd, shownAccount.monthlyStartBalanceUsd ?? 0) >= 0 ? '#00E5A0' : '#FF6B6B' }}>{calculateAccountResult(account, month, shownAccount.balanceUsd, shownAccount.monthlyStartBalanceUsd ?? 0) >= 0 ? '+' : ''}{tradingMoney(calculateAccountResult(account, month, shownAccount.balanceUsd, shownAccount.monthlyStartBalanceUsd ?? 0))}</div></div>
             </div>
             <div style={{ display:'flex', gap:7, marginTop:9 }}>
