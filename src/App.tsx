@@ -2164,6 +2164,7 @@ type TradingSnapshot = {
   monthlyStartBalanceUsd: number
   monthlyResultUsd: number
   updatedAt: number
+  phase?: string
 }
 
 const tradingMoney = (value: number) => value.toLocaleString('en-US', { style:'currency', currency:'USD', maximumFractionDigits:2 })
@@ -2178,6 +2179,15 @@ const thisTradingMonth = () => {
 const tradingNumber = (value: string) => {
   const parsed = Number(value.replace(/,/g, ''))
   return Number.isFinite(parsed) ? parsed : 0
+}
+
+// Identifica o capital nominal pelo nome da conta (ex.: "Funding Pips 100k", "The5ers 200000").
+const getNominalAccountSize = (name: string): number => {
+  const normalized = name.toLowerCase().replace(/[,.$]/g, '').replace(/\\s+/g, ' ')
+  const matchK = normalized.match(/(?:^|\\D)(\\d+(?:\\.\\d+)?)\\s*k\\b/)
+  if (matchK) return Number(matchK[1]) * 1000
+  const matchFull = normalized.match(/(?:^|\\D)(100000|200000)(?:\\D|$)/)
+  return matchFull ? Number(matchFull[1]) : 0
 }
 
 function TradingScreen({ uid }: { uid: string }) {
@@ -2279,6 +2289,52 @@ function TradingScreen({ uid }: { uid: string }) {
     } finally { setSaving(false) }
   }
 
+  const promoteToFunded = async (account: TradingAccount) => {
+    if (account.kind !== 'prop' || account.stage !== 'Fase 2') return
+    const nominalSize = getNominalAccountSize(account.name)
+    if (!nominalSize) {
+      setMessage(`Não consegui identificar o capital nominal em "${account.name}". Inclua 100k, 200k, 100000 ou 200000 no nome da conta.`)
+      return
+    }
+    const confirmed = window.confirm(
+      `Promover ${account.name} para Funded?\\n\\nO saldo será reiniciado para ${tradingMoney(nominalSize)}. O resultado da avaliação será preservado no histórico e não será contado como prejuízo.`
+    )
+    if (!confirmed) return
+    setSaving(true); setMessage('')
+    const now = Date.now()
+    const currentMonth = thisTradingMonth()
+    const evaluationResult = calculateAccountResult(account, currentMonth, account.balanceUsd || 0, account.monthlyStartBalanceUsd || 0)
+    const archiveId = `${account.key}_${currentMonth}_evaluation_${now}`
+    const archive: TradingSnapshot = {
+      id:archiveId, accountKey:account.key, accountName:`${account.name} (avaliação)`,
+      month:currentMonth, balanceUsd:account.balanceUsd || 0,
+      monthlyStartBalanceUsd:account.monthlyStartBalanceUsd || 0,
+      monthlyResultUsd:evaluationResult, updatedAt:now, phase:'evaluation-archive'
+    }
+    const promoted: TradingAccount = {
+      ...account, stage:'Funded', balanceUsd:nominalSize,
+      monthlyStartBalanceUsd:nominalSize, monthlyResultUsd:0, updatedAt:now
+    }
+    const fundedSnapshot: TradingSnapshot = {
+      id:`${account.key}_${currentMonth}`, accountKey:account.key, accountName:account.name,
+      month:currentMonth, balanceUsd:nominalSize, monthlyStartBalanceUsd:nominalSize,
+      monthlyResultUsd:0, updatedAt:now, phase:'funded'
+    }
+    try {
+      await Promise.all([
+        setDoc(doc(db, 'users', uid, 'tradingHistory', archiveId), archive),
+        setDoc(doc(db, 'users', uid, 'tradingHistory', fundedSnapshot.id), fundedSnapshot),
+        setDoc(doc(db, 'users', uid, 'tradingAccounts', account.key), promoted)
+      ])
+      setAccounts(prev => prev.map(a => a.key === account.key ? promoted : a))
+      setHistory(prev => [archive, fundedSnapshot, ...prev.filter(h => h.id !== fundedSnapshot.id)].sort((a,b) => b.month.localeCompare(a.month)))
+      setMessage(`Conta promovida para Funded com saldo de ${tradingMoney(nominalSize)}. Resultado da avaliação preservado no histórico.`)
+    } catch (error) {
+      console.error('Erro ao promover conta:', error)
+      setMessage('Não foi possível promover a conta. Tente novamente.')
+    } finally { setSaving(false) }
+  }
+
   const saveAccount = async () => {
     if (!draft) return
     setSaving(true); setMessage('')
@@ -2357,7 +2413,7 @@ function TradingScreen({ uid }: { uid: string }) {
   }
 
   const stageColor = (stage: string) => stage.toLowerCase().includes('funded') ? '#00E5A0' : stage.toLowerCase().includes('fase') || stage.toLowerCase().includes('teste') ? '#FF9F43' : '#4E9EFF'
-  const monthHistory = history.filter(h => h.month === month)
+  const monthHistory = history.filter(h => h.month === month && h.phase !== 'evaluation-archive')
   const monthlyTotal = monthHistory.reduce((sum,h) => {
     const account = accounts.find(a => a.key === h.accountKey)
     return sum + (account ? calculateAccountResult(account, month, h.balanceUsd, h.monthlyStartBalanceUsd) : h.monthlyResultUsd)
@@ -2437,6 +2493,7 @@ function TradingScreen({ uid }: { uid: string }) {
                 <button style={{ ...S.btnGhost, marginTop:0 }} onClick={() => setMovementAccountKey(null)}>Cancelar</button>
               </div>
             </div>}
+            {account.kind === 'prop' && account.stage === 'Fase 2' && <button style={{ ...S.btn, width:'100%', marginTop:9, background:'#00A878' }} disabled={saving} onClick={() => promoteToFunded(account)}>{saving ? 'Processando...' : '✓ Promover para Funded'}</button>}
             {movementsFor(account.key, month).length > 0 && <div style={{ marginTop:9, borderTop:'1px solid rgba(255,255,255,0.08)', paddingTop:7 }}>
               <div style={{ ...S.label, marginBottom:5 }}>Movimentações em {tradingMonth(month)}</div>
               {movementsFor(account.key, month).map(m => <div key={m.id} style={{ display:'flex', justifyContent:'space-between', fontSize:10, padding:'3px 0', color:'rgba(255,255,255,0.7)' }}>
