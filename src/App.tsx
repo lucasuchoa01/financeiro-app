@@ -2421,7 +2421,9 @@ function TradingScreen({ uid }: { uid: string }) {
     const account = accounts.find(a => a.key === h.accountKey)
     return sum + (account ? calculateAccountResult(account, month, h.balanceUsd, h.monthlyStartBalanceUsd) : h.monthlyResultUsd)
   }, 0)
-  const monthKeys = [...new Set([thisTradingMonth(), ...history.map(h => h.month)])].sort((a,b) => b.localeCompare(a))
+  const payoutsForMonth = (selectedMonth: string) =>
+    movements.filter(m => m.month === selectedMonth && m.type === 'payout').reduce((sum,m) => sum + m.amount, 0)
+  const monthKeys = [...new Set([thisTradingMonth(), ...history.map(h => h.month), ...movements.filter(m => m.type === 'payout').map(m => m.month)])].sort((a,b) => b.localeCompare(a))
 
   if (loading) return <LoadingScreen />
 
@@ -2442,15 +2444,28 @@ function TradingScreen({ uid }: { uid: string }) {
         </div>
         <div style={{ fontSize:23, fontWeight:700, color:monthlyTotal >= 0 ? '#00E5A0' : '#FF6B6B' }}>{monthlyTotal >= 0 ? '+' : ''}{tradingMoney(monthlyTotal)}</div>
         <div style={{ ...S.muted, fontSize:11, marginTop:4 }}>Soma dos resultados informados nas contas em {tradingMonth(month)}.</div>
-        {history.length > 0 && <div style={{ marginTop:10, borderTop:'1px solid rgba(255,255,255,0.08)', paddingTop:8 }}>
+        <div style={{ marginTop:10, padding:'10px 0 2px', borderTop:'1px solid rgba(255,255,255,0.08)' }}>
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.55)' }}>Payouts recebidos em {tradingMonth(month)}</div>
+          <div style={{ fontSize:19, fontWeight:700, color:'#4E9EFF', marginTop:3 }}>+{tradingMoney(payoutsForMonth(month))}</div>
+          <div style={{ ...S.muted, fontSize:10, marginTop:3 }}>Total efetivamente recebido das mesas proprietárias.</div>
+        </div>
+        {(history.length > 0 || movements.some(m => m.type === 'payout')) && <div style={{ marginTop:10, borderTop:'1px solid rgba(255,255,255,0.08)', paddingTop:8 }}>
           <div style={{ ...S.label, marginBottom:8 }}>Comparativo dos meses</div>
-          {monthKeys.filter(m => history.some(h => h.month === m)).slice(0,6).map(m => {
+          <div style={{ display:'grid', gridTemplateColumns:'minmax(52px, 0.7fr) 1fr 1fr', gap:7, paddingBottom:5, borderBottom:'1px solid rgba(255,255,255,0.06)', fontSize:9, color:'rgba(255,255,255,0.4)' }}>
+            <span>Mês</span><span style={{ textAlign:'right' }}>Resultado</span><span style={{ textAlign:'right' }}>Payouts</span>
+          </div>
+          {monthKeys.filter(m => history.some(h => h.month === m) || payoutsForMonth(m) > 0).slice(0,6).map(m => {
             const total = history.filter(h => h.month === m).reduce((sum,h) => {
               if (h.phase === 'evaluation-archive') return sum + h.monthlyResultUsd
               const account = accounts.find(a => a.key === h.accountKey)
               return sum + (account ? calculateAccountResult(account, m, h.balanceUsd, h.monthlyStartBalanceUsd) : h.monthlyResultUsd)
             }, 0)
-            return <div key={m} style={{ display:'flex', justifyContent:'space-between', padding:'4px 0', fontSize:11 }}><span style={{ color:'rgba(255,255,255,0.65)' }}>{tradingMonth(m)}</span><span style={{ fontWeight:600, color:total >= 0 ? '#00E5A0' : '#FF6B6B' }}>{total >= 0 ? '+' : ''}{tradingMoney(total)}</span></div>
+            const payoutTotal = payoutsForMonth(m)
+            return <div key={m} style={{ display:'grid', gridTemplateColumns:'minmax(52px, 0.7fr) 1fr 1fr', gap:7, padding:'5px 0', fontSize:11, alignItems:'center' }}>
+              <span style={{ color:'rgba(255,255,255,0.65)' }}>{tradingMonth(m)}</span>
+              <span style={{ textAlign:'right', fontWeight:600, color:total >= 0 ? '#00E5A0' : '#FF6B6B' }}>{total >= 0 ? '+' : ''}{tradingMoney(total)}</span>
+              <span style={{ textAlign:'right', fontWeight:600, color:'#4E9EFF' }}>{payoutTotal > 0 ? '+' : ''}{tradingMoney(payoutTotal)}</span>
+            </div>
           })}
         </div>}
       </div>
