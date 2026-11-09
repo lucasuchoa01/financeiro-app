@@ -2183,10 +2183,10 @@ const tradingNumber = (value: string) => {
 
 // Identifica o capital nominal pelo nome da conta (ex.: "Funding Pips 100k", "The5ers 200000").
 const getNominalAccountSize = (name: string): number => {
-  const normalized = name.toLowerCase().replace(/[,.$]/g, '').replace(/\\s+/g, ' ')
-  const matchK = normalized.match(/(?:^|\\D)(\\d+(?:\\.\\d+)?)\\s*k\\b/)
+  const normalized = name.toLowerCase().replace(/[,.$]/g, '').replace(/\s+/g, ' ')
+  const matchK = normalized.match(/(?:^|\D)(\d+(?:\.\d+)?)\s*k\b/)
   if (matchK) return Number(matchK[1]) * 1000
-  const matchFull = normalized.match(/(?:^|\\D)(100000|200000)(?:\\D|$)/)
+  const matchFull = normalized.match(/(?:^|\D)(100000|200000)(?:\D|$)/)
   return matchFull ? Number(matchFull[1]) : 0
 }
 
